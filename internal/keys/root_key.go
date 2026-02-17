@@ -20,6 +20,12 @@ var (
 	once     sync.Once
 )
 
+// NewRootKeyHolder creates a new RootKeyHolder instance (for testing).
+// Production code should use GetRootKeyHolder() for the singleton.
+func NewRootKeyHolder() *RootKeyHolder {
+	return &RootKeyHolder{}
+}
+
 // GetRootKeyHolder returns the singleton RootKeyHolder instance.
 func GetRootKeyHolder() *RootKeyHolder {
 	once.Do(func() {

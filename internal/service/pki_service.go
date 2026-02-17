@@ -53,7 +53,7 @@ func (s *PKIService) CreateOrgCA(ctx context.Context, req *CreateOrgCARequest) (
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 
-	s.auditLogger.Log(ctx, req.OrgID, "org_ca_created", "system",
+	_ = s.auditLogger.Log(ctx, req.OrgID, "org_ca_created", "system",
 		fmt.Sprintf("Org intermediate CA created for %s (serial: %s)", req.OrgName, cert.SerialNumber.Text(16)), "")
 
 	return &CreateOrgCAResponse{
@@ -99,7 +99,7 @@ func (s *PKIService) IssueMemberCert(ctx context.Context, req *IssueMemberCertRe
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 
-	s.auditLogger.Log(ctx, req.OrgID, "member_cert_issued", req.MemberID,
+	_ = s.auditLogger.Log(ctx, req.OrgID, "member_cert_issued", req.MemberID,
 		fmt.Sprintf("Member certificate issued for %s", req.MemberEmail), "")
 
 	cert, _ := x509.ParseCertificate(certDER)

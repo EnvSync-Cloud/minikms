@@ -34,6 +34,66 @@ Root Key (256-bit, loaded from env at startup)
 - **Tenant Master Key**: Deterministically derived from the root key using HKDF with configurable salt. No database storage needed.
 - **Scope DEK**: Random AES-256 key generated per scope. Stored encrypted (wrapped by tenant master key) in PostgreSQL with version tracking.
 
+### Key Hierarchy & Encryption Flow
+
+```mermaid
+graph TD
+    RK[Root Key<br/>256-bit, in-memory only] -->|HKDF-SHA256| TMK[Tenant Master Key<br/>per org_id, deterministic]
+    TMK -->|AES-256-GCM wrap| DEK[Scope DEK<br/>per app_id, stored encrypted]
+    DEK -->|AES-256-GCM + AAD| ED[Encrypted Data]
+    RK -->|Shamir 3-of-5| KES[Key Escrow Shares<br/>disaster recovery]
+
+    style RK fill:#e74c3c,color:#fff
+    style TMK fill:#e67e22,color:#fff
+    style DEK fill:#2ecc71,color:#fff
+    style ED fill:#3498db,color:#fff
+    style KES fill:#9b59b6,color:#fff
+```
+
+### PKI Certificate Chain
+
+```mermaid
+graph TD
+    ROOT[Root CA<br/>P-384, self-signed<br/>MaxPathLen: 1] -->|signs| ORG[Org Intermediate CA<br/>P-384, MaxPathLen: 0<br/>OID: org_id]
+    ORG -->|signs| MEMBER[Member Certificate<br/>P-256, IsCA: false<br/>ExtKeyUsage: ClientAuth<br/>OID: member_id, org_id, role]
+    ORG -->|issues| CRL[CRL<br/>Certificate Revocation List]
+    CRL -.->|revokes| MEMBER
+
+    style ROOT fill:#e74c3c,color:#fff
+    style ORG fill:#e67e22,color:#fff
+    style MEMBER fill:#2ecc71,color:#fff
+    style CRL fill:#95a5a6,color:#fff
+```
+
+### Encrypt Request Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant KMS as KMSService
+    participant DEK as AppDEKManager
+    participant DB as PostgreSQL
+    participant OKM as OrgKeyManager
+    participant RKH as RootKeyHolder
+    participant Crypto as crypto
+
+    C->>KMS: Encrypt(tenant_id, scope_id, plaintext, aad)
+    KMS->>DEK: GetOrCreateDEK(tenant_id, scope_id)
+    DEK->>DB: GetActiveKeyVersion()
+    alt No active DEK
+        DEK->>Crypto: GenerateKey()
+        DEK->>OKM: DeriveOrgKey(tenant_id)
+        OKM->>RKH: GetKey()
+        OKM->>Crypto: DeriveOrgMasterKey(rootKey, orgID)
+        DEK->>Crypto: Encrypt(orgKey, dek, aad)
+        DEK->>DB: CreateKeyVersion(encryptedDEK)
+    end
+    DEK-->>KMS: plaintext DEK, keyVersionID
+    KMS->>Crypto: Encrypt(dek, plaintext, aad)
+    KMS->>DEK: IncrementAndCheckRotation(keyVersionID)
+    KMS-->>C: base64(ciphertext), keyVersionID
+```
+
 ### gRPC Services
 
 | Service | Description |

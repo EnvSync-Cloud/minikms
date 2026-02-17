@@ -183,6 +183,7 @@ func (s *PostgresStore) GetEntries(ctx context.Context, orgID string, limit, off
 			&e.Action, &e.ActorID, &e.OrgID, &e.Details, &e.RequestJWTHash); err != nil {
 			return nil, err
 		}
+		e.Timestamp = e.Timestamp.UTC()
 		entries = append(entries, &e)
 	}
 	return entries, rows.Err()
