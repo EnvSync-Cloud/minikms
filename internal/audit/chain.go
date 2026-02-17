@@ -58,7 +58,7 @@ func (l *AuditLogger) Log(ctx context.Context, orgID, action, actorID, details, 
 		previousHash = GenesisHash
 	}
 
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Microsecond) // Truncate to match PostgreSQL timestamp precision
 	entryHash := ComputeEntryHash(previousHash, now, action, actorID, details)
 
 	entry := &AuditEntry{
