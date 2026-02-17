@@ -40,15 +40,17 @@ type CreateOrgCAResponse struct {
 	SerialHex  string
 }
 
-// CreateOrgCA creates an org intermediate CA certificate.
-func (s *PKIService) CreateOrgCA(ctx context.Context, req *CreateOrgCARequest) (*CreateOrgCAResponse, error) {
-	cert, _, certDER, err := pki.CreateOrgIntermediateCA(
+// CreateOrgCAFull creates an org intermediate CA certificate and returns the
+// parsed certificate and private key alongside the response. This is used by
+// the gRPC adapter to cache the org CA for subsequent IssueMemberCert calls.
+func (s *PKIService) CreateOrgCAFull(ctx context.Context, req *CreateOrgCARequest) (*CreateOrgCAResponse, *x509.Certificate, *ecdsa.PrivateKey, error) {
+	cert, key, certDER, err := pki.CreateOrgIntermediateCA(
 		req.OrgID, req.OrgName,
 		s.rootCert, s.rootKey,
 		10*365*24*time.Hour, // 10 year validity
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create org CA: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to create org CA: %w", err)
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
@@ -56,10 +58,22 @@ func (s *PKIService) CreateOrgCA(ctx context.Context, req *CreateOrgCARequest) (
 	_ = s.auditLogger.Log(ctx, req.OrgID, "org_ca_created", "system",
 		fmt.Sprintf("Org intermediate CA created for %s (serial: %s)", req.OrgName, cert.SerialNumber.Text(16)), "")
 
-	return &CreateOrgCAResponse{
+	resp := &CreateOrgCAResponse{
 		CertPEM:   string(certPEM),
 		SerialHex: cert.SerialNumber.Text(16),
-	}, nil
+	}
+	return resp, cert, key, nil
+}
+
+// CreateOrgCA creates an org intermediate CA certificate.
+func (s *PKIService) CreateOrgCA(ctx context.Context, req *CreateOrgCARequest) (*CreateOrgCAResponse, error) {
+	resp, _, _, err := s.CreateOrgCAFull(ctx, req)
+	return resp, err
+}
+
+// RootCert returns the root CA certificate.
+func (s *PKIService) RootCert() *x509.Certificate {
+	return s.rootCert
 }
 
 // IssueMemberCertRequest represents a request to issue a member certificate.

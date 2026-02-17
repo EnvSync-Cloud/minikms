@@ -1,0 +1,109 @@
+package grpc
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/x509"
+	"encoding/pem"
+	"sync"
+
+	pb "github.com/envsync/minikms/api/proto/minikms/v1"
+	"github.com/envsync/minikms/internal/service"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+type orgCAEntry struct {
+	cert *x509.Certificate
+	key  *ecdsa.PrivateKey
+}
+
+// PKIAdapter bridges the proto PKIServiceServer interface to the internal
+// PKIService. It caches org CA cert+key so that IssueMemberCert can look
+// them up by org_id alone.
+type PKIAdapter struct {
+	pb.UnimplementedPKIServiceServer
+	pkiSvc *service.PKIService
+
+	mu      sync.RWMutex
+	orgCAs  map[string]*orgCAEntry
+}
+
+// NewPKIAdapter creates a new PKIAdapter.
+func NewPKIAdapter(pkiSvc *service.PKIService) *PKIAdapter {
+	return &PKIAdapter{
+		pkiSvc: pkiSvc,
+		orgCAs: make(map[string]*orgCAEntry),
+	}
+}
+
+func (a *PKIAdapter) CreateOrgCA(ctx context.Context, req *pb.CreateOrgCARequest) (*pb.CreateOrgCAResponse, error) {
+	resp, cert, key, err := a.pkiSvc.CreateOrgCAFull(ctx, &service.CreateOrgCARequest{
+		OrgID:   req.OrgId,
+		OrgName: req.OrgName,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "%v", err)
+	}
+
+	a.mu.Lock()
+	a.orgCAs[req.OrgId] = &orgCAEntry{cert: cert, key: key}
+	a.mu.Unlock()
+
+	return &pb.CreateOrgCAResponse{
+		CertPem:   resp.CertPEM,
+		SerialHex: resp.SerialHex,
+	}, nil
+}
+
+func (a *PKIAdapter) IssueMemberCert(ctx context.Context, req *pb.IssueMemberCertRequest) (*pb.IssueMemberCertResponse, error) {
+	a.mu.RLock()
+	entry, ok := a.orgCAs[req.OrgId]
+	a.mu.RUnlock()
+	if !ok {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"org CA for %q not found; call CreateOrgCA first", req.OrgId)
+	}
+
+	resp, err := a.pkiSvc.IssueMemberCert(ctx, &service.IssueMemberCertRequest{
+		MemberID:    req.MemberId,
+		MemberEmail: req.MemberEmail,
+		OrgID:       req.OrgId,
+		Role:        req.Role,
+		OrgCACert:   entry.cert,
+		OrgCAKey:    entry.key,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "%v", err)
+	}
+
+	return &pb.IssueMemberCertResponse{
+		CertPem:   resp.CertPEM,
+		KeyPem:    resp.KeyPEM,
+		SerialHex: resp.SerialHex,
+	}, nil
+}
+
+func (a *PKIAdapter) GetRootCA(ctx context.Context, _ *pb.GetRootCARequest) (*pb.GetRootCAResponse, error) {
+	rootCert := a.pkiSvc.RootCert()
+	if rootCert == nil {
+		return nil, status.Error(codes.Internal, "root CA not initialized")
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootCert.Raw})
+	return &pb.GetRootCAResponse{CertPem: string(certPEM)}, nil
+}
+
+func (a *PKIAdapter) RevokeCert(context.Context, *pb.RevokeCertRequest) (*pb.RevokeCertResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "RevokeCert not implemented")
+}
+
+func (a *PKIAdapter) GetCRL(context.Context, *pb.GetCRLRequest) (*pb.GetCRLResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "GetCRL not implemented")
+}
+
+func (a *PKIAdapter) CheckOCSP(context.Context, *pb.CheckOCSPRequest) (*pb.CheckOCSPResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "CheckOCSP not implemented")
+}
+
+// compile-time assertion
+var _ pb.PKIServiceServer = (*PKIAdapter)(nil)

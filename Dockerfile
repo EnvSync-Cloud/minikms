@@ -1,4 +1,4 @@
-FROM golang:1.22-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates
 
@@ -12,7 +12,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /minikms ./cmd/minikms
 
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata netcat-openbsd
 RUN adduser -D -g '' minikms
 
 COPY --from=builder /minikms /usr/local/bin/minikms

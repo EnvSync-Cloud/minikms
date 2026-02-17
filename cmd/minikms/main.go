@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -15,9 +16,12 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
+	pb "github.com/envsync/minikms/api/proto/minikms/v1"
 	"github.com/envsync/minikms/internal/audit"
 	"github.com/envsync/minikms/internal/config"
+	grpcadapter "github.com/envsync/minikms/internal/grpc"
 	"github.com/envsync/minikms/internal/keys"
+	"github.com/envsync/minikms/internal/pki"
 	"github.com/envsync/minikms/internal/ratelimit"
 	"github.com/envsync/minikms/internal/service"
 	"github.com/envsync/minikms/internal/store"
@@ -65,14 +69,23 @@ func main() {
 	// Initialize rate limiter
 	_ = ratelimit.NewRateLimiter(redisStore.Client(), cfg.RateLimitPerSecond, cfg.RateLimitBurst)
 
+	// Generate PKI root CA
+	rootCert, rootKey, _, err := pki.CreateRootCA("miniKMS Root CA", 10*365*24*time.Hour)
+	if err != nil {
+		log.Fatalf("Failed to create PKI root CA: %v", err)
+	}
+	log.Println("PKI root CA generated")
+
 	// Initialize services
 	kmsSvc := service.NewKMSService(dekManager, auditLogger)
 	keySvc := service.NewKeyService(dekManager, versionManager, auditLogger)
 	auditSvc := service.NewAuditService(auditLogger, pgStore)
+	pkiSvc := service.NewPKIService(rootCert, rootKey, auditLogger)
 
-	_ = kmsSvc
-	_ = keySvc
-	_ = auditSvc
+	// Create gRPC adapters
+	kmsAdapter := grpcadapter.NewKMSAdapter(kmsSvc, keySvc)
+	pkiAdapter := grpcadapter.NewPKIAdapter(pkiSvc)
+	auditAdapter := grpcadapter.NewAuditAdapter(auditSvc)
 
 	// Create gRPC server
 	var opts []grpc.ServerOption
@@ -85,6 +98,11 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer(opts...)
+
+	// Register gRPC services
+	pb.RegisterKMSServiceServer(grpcServer, kmsAdapter)
+	pb.RegisterPKIServiceServer(grpcServer, pkiAdapter)
+	pb.RegisterAuditServiceServer(grpcServer, auditAdapter)
 
 	// Register health check
 	healthServer := health.NewServer()
