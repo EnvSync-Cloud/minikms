@@ -11,6 +11,7 @@ import (
 
 	"github.com/envsync/minikms/internal/audit"
 	"github.com/envsync/minikms/internal/pki"
+	"github.com/envsync/minikms/internal/pkistore"
 )
 
 // PKIService handles certificate lifecycle gRPC operations.
@@ -18,11 +19,11 @@ type PKIService struct {
 	rootCert    *x509.Certificate
 	rootKey     *ecdsa.PrivateKey
 	auditLogger *audit.AuditLogger
-	store       PKICertStore
+	store       pkistore.Store
 }
 
 // NewPKIService creates a new PKIService.
-func NewPKIService(rootCert *x509.Certificate, rootKey *ecdsa.PrivateKey, auditLogger *audit.AuditLogger, store PKICertStore) *PKIService {
+func NewPKIService(rootCert *x509.Certificate, rootKey *ecdsa.PrivateKey, auditLogger *audit.AuditLogger, store pkistore.Store) *PKIService {
 	return &PKIService{
 		rootCert:    rootCert,
 		rootKey:     rootKey,
@@ -61,7 +62,7 @@ func (s *PKIService) CreateOrgCAFull(ctx context.Context, req *CreateOrgCAReques
 
 	// Persist to database
 	if s.store != nil {
-		_ = s.store.StoreCertificate(ctx, &PKICertRecord{
+		_ = s.store.StoreCertificate(ctx, &pkistore.CertRecord{
 			SerialNumber: serialHex,
 			CertType:     "org_intermediate_ca",
 			OrgID:        req.OrgID,
@@ -136,7 +137,7 @@ func (s *PKIService) IssueMemberCert(ctx context.Context, req *IssueMemberCertRe
 
 	// Persist to database
 	if s.store != nil {
-		_ = s.store.StoreCertificate(ctx, &PKICertRecord{
+		_ = s.store.StoreCertificate(ctx, &pkistore.CertRecord{
 			SerialNumber: serialHex,
 			CertType:     "member",
 			OrgID:        req.OrgID,
@@ -206,7 +207,7 @@ func (s *PKIService) RevokeCert(ctx context.Context, req *RevokeCertRequest) err
 	now := time.Now().UTC()
 
 	// Insert CRL entry
-	if err := s.store.InsertCRLEntry(ctx, &CRLEntryRecord{
+	if err := s.store.InsertCRLEntry(ctx, &pkistore.CRLEntryRecord{
 		CertSerial:   req.SerialHex,
 		IssuerSerial: orgCA.SerialNumber,
 		RevokedAt:    now,

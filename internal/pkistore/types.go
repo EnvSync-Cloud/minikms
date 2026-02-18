@@ -1,12 +1,12 @@
-package service
+package pkistore
 
 import (
 	"context"
 	"time"
 )
 
-// PKICertRecord represents a certificate row in the certificates table.
-type PKICertRecord struct {
+// CertRecord represents a certificate row in the certificates table.
+type CertRecord struct {
 	ID           string
 	SerialNumber string
 	CertType     string // root_ca, org_intermediate_ca, member
@@ -28,11 +28,11 @@ type CRLEntryRecord struct {
 	IsDelta      bool
 }
 
-// PKICertStore abstracts database operations for PKI certificate lifecycle.
-type PKICertStore interface {
-	StoreCertificate(ctx context.Context, rec *PKICertRecord) error
-	GetCertificateBySerial(ctx context.Context, serialNumber string) (*PKICertRecord, error)
-	GetOrgCA(ctx context.Context, orgID string) (*PKICertRecord, error)
+// Store abstracts database operations for PKI certificate lifecycle.
+type Store interface {
+	StoreCertificate(ctx context.Context, rec *CertRecord) error
+	GetCertificateBySerial(ctx context.Context, serialNumber string) (*CertRecord, error)
+	GetOrgCA(ctx context.Context, orgID string) (*CertRecord, error)
 	UpdateCertificateStatus(ctx context.Context, serialNumber, status string) error
 	InsertCRLEntry(ctx context.Context, entry *CRLEntryRecord) error
 	GetCRLEntries(ctx context.Context, issuerSerial string) ([]CRLEntryRecord, error)
