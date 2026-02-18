@@ -12,6 +12,7 @@ import (
 	"github.com/envsync/minikms/internal/audit"
 	"github.com/envsync/minikms/internal/auth"
 	"github.com/envsync/minikms/internal/keys"
+	"github.com/envsync/minikms/internal/service"
 )
 
 // PostgresStore implements all store interfaces using PostgreSQL via pgx.
@@ -199,4 +200,114 @@ func (s *PostgresStore) VerifyChain(ctx context.Context, orgID string) (bool, er
 	}
 	valid, _ := audit.VerifyChainIntegrity(entries)
 	return valid, nil
+}
+
+// --- PKICertStore interface implementation ---
+
+func (s *PostgresStore) StoreCertificate(ctx context.Context, rec *service.PKICertRecord) error {
+	rec.ID = uuid.New().String()
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO certificates (id, serial_number, cert_type, org_id, subject_cn, cert_pem, status, issued_at, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		rec.ID, rec.SerialNumber, rec.CertType, rec.OrgID, rec.SubjectCN, rec.CertPEM, rec.Status, rec.IssuedAt, rec.ExpiresAt)
+	return err
+}
+
+func (s *PostgresStore) GetCertificateBySerial(ctx context.Context, serialNumber string) (*service.PKICertRecord, error) {
+	row := s.pool.QueryRow(ctx,
+		`SELECT id, serial_number, cert_type, org_id, subject_cn, cert_pem, status, issued_at, expires_at
+		 FROM certificates WHERE serial_number = $1`, serialNumber)
+
+	var r service.PKICertRecord
+	err := row.Scan(&r.ID, &r.SerialNumber, &r.CertType, &r.OrgID, &r.SubjectCN, &r.CertPEM, &r.Status, &r.IssuedAt, &r.ExpiresAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+func (s *PostgresStore) GetOrgCA(ctx context.Context, orgID string) (*service.PKICertRecord, error) {
+	row := s.pool.QueryRow(ctx,
+		`SELECT id, serial_number, cert_type, org_id, subject_cn, cert_pem, status, issued_at, expires_at
+		 FROM certificates
+		 WHERE org_id = $1 AND cert_type = 'org_intermediate_ca' AND status = 'active'
+		 ORDER BY created_at DESC LIMIT 1`, orgID)
+
+	var r service.PKICertRecord
+	err := row.Scan(&r.ID, &r.SerialNumber, &r.CertType, &r.OrgID, &r.SubjectCN, &r.CertPEM, &r.Status, &r.IssuedAt, &r.ExpiresAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+func (s *PostgresStore) UpdateCertificateStatus(ctx context.Context, serialNumber, status string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE certificates SET status = $1 WHERE serial_number = $2`,
+		status, serialNumber)
+	return err
+}
+
+func (s *PostgresStore) InsertCRLEntry(ctx context.Context, entry *service.CRLEntryRecord) error {
+	id := uuid.New().String()
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO crl_entries (id, cert_serial, issuer_serial, revoked_at, reason, crl_number, is_delta)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		id, entry.CertSerial, entry.IssuerSerial, entry.RevokedAt, entry.Reason, entry.CRLNumber, entry.IsDelta)
+	return err
+}
+
+func (s *PostgresStore) GetCRLEntries(ctx context.Context, issuerSerial string) ([]service.CRLEntryRecord, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT cert_serial, issuer_serial, revoked_at, reason, crl_number, is_delta
+		 FROM crl_entries WHERE issuer_serial = $1 ORDER BY revoked_at`, issuerSerial)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []service.CRLEntryRecord
+	for rows.Next() {
+		var e service.CRLEntryRecord
+		if err := rows.Scan(&e.CertSerial, &e.IssuerSerial, &e.RevokedAt, &e.Reason, &e.CRLNumber, &e.IsDelta); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
+func (s *PostgresStore) GetNextCRLNumber(ctx context.Context, issuerSerial string) (int64, error) {
+	var maxNum *int64
+	err := s.pool.QueryRow(ctx,
+		`SELECT MAX(crl_number) FROM crl_entries WHERE issuer_serial = $1`, issuerSerial).Scan(&maxNum)
+	if err != nil {
+		return 1, nil
+	}
+	if maxNum == nil {
+		return 1, nil
+	}
+	return *maxNum + 1, nil
+}
+
+func (s *PostgresStore) GetCertRevocationEntry(ctx context.Context, serialNumber string) (*service.CRLEntryRecord, error) {
+	row := s.pool.QueryRow(ctx,
+		`SELECT cert_serial, issuer_serial, revoked_at, reason, crl_number, is_delta
+		 FROM crl_entries WHERE cert_serial = $1 LIMIT 1`, serialNumber)
+
+	var e service.CRLEntryRecord
+	err := row.Scan(&e.CertSerial, &e.IssuerSerial, &e.RevokedAt, &e.Reason, &e.CRLNumber, &e.IsDelta)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &e, nil
 }

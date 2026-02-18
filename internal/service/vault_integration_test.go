@@ -48,7 +48,7 @@ func setupIntegrationStack(t *testing.T) *integrationStack {
 	if err != nil {
 		t.Fatalf("CreateRootCA: %v", err)
 	}
-	pkiSvc := NewPKIService(rootCert, rootKey, auditLogger)
+	pkiSvc := NewPKIService(rootCert, rootKey, auditLogger, nil)
 
 	return &integrationStack{
 		kmsSvc:     kmsSvc,

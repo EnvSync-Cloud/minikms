@@ -41,7 +41,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("CreateRootCA: %v", err)
 	}
-	pkiSvc := service.NewPKIService(rootCert, rootKey, auditLogger)
+	pkiSvc := service.NewPKIService(rootCert, rootKey, auditLogger, nil)
 
 	fmt.Println("[Setup] Stack initialized: KMSService, KeyService, AuditService, PKIService")
 	fmt.Println()

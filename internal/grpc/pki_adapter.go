@@ -93,16 +93,56 @@ func (a *PKIAdapter) GetRootCA(ctx context.Context, _ *pb.GetRootCARequest) (*pb
 	return &pb.GetRootCAResponse{CertPem: string(certPEM)}, nil
 }
 
-func (a *PKIAdapter) RevokeCert(context.Context, *pb.RevokeCertRequest) (*pb.RevokeCertResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "RevokeCert not implemented")
+func (a *PKIAdapter) RevokeCert(ctx context.Context, req *pb.RevokeCertRequest) (*pb.RevokeCertResponse, error) {
+	if err := a.pkiSvc.RevokeCert(ctx, &service.RevokeCertRequest{
+		SerialHex: req.SerialHex,
+		OrgID:     req.OrgId,
+		Reason:    int(req.Reason),
+	}); err != nil {
+		return nil, status.Errorf(codes.Internal, "%v", err)
+	}
+	return &pb.RevokeCertResponse{Success: true}, nil
 }
 
-func (a *PKIAdapter) GetCRL(context.Context, *pb.GetCRLRequest) (*pb.GetCRLResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "GetCRL not implemented")
+func (a *PKIAdapter) GetCRL(ctx context.Context, req *pb.GetCRLRequest) (*pb.GetCRLResponse, error) {
+	a.mu.RLock()
+	entry, ok := a.orgCAs[req.OrgId]
+	a.mu.RUnlock()
+	if !ok {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"org CA for %q not found; call CreateOrgCA first", req.OrgId)
+	}
+
+	resp, err := a.pkiSvc.GetCRL(ctx, &service.GetCRLRequest{
+		OrgID:      req.OrgId,
+		DeltaOnly:  req.DeltaOnly,
+		IssuerCert: entry.cert,
+		IssuerKey:  entry.key,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "%v", err)
+	}
+
+	return &pb.GetCRLResponse{
+		CrlDer:    resp.CRLDER,
+		CrlNumber: resp.CRLNumber,
+		IsDelta:   resp.IsDelta,
+	}, nil
 }
 
-func (a *PKIAdapter) CheckOCSP(context.Context, *pb.CheckOCSPRequest) (*pb.CheckOCSPResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "CheckOCSP not implemented")
+func (a *PKIAdapter) CheckOCSP(ctx context.Context, req *pb.CheckOCSPRequest) (*pb.CheckOCSPResponse, error) {
+	resp, err := a.pkiSvc.CheckOCSP(ctx, &service.CheckOCSPRequest{
+		SerialHex: req.SerialHex,
+		OrgID:     req.OrgId,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "%v", err)
+	}
+
+	return &pb.CheckOCSPResponse{
+		Status:    int32(resp.Status),
+		RevokedAt: resp.RevokedAt,
+	}, nil
 }
 
 // compile-time assertion

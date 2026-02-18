@@ -80,7 +80,7 @@ func main() {
 	kmsSvc := service.NewKMSService(dekManager, auditLogger)
 	keySvc := service.NewKeyService(dekManager, versionManager, auditLogger)
 	auditSvc := service.NewAuditService(auditLogger, pgStore)
-	pkiSvc := service.NewPKIService(rootCert, rootKey, auditLogger)
+	pkiSvc := service.NewPKIService(rootCert, rootKey, auditLogger, pgStore)
 
 	// Create gRPC adapters
 	kmsAdapter := grpcadapter.NewKMSAdapter(kmsSvc, keySvc)

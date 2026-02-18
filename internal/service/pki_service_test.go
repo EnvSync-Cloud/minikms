@@ -21,7 +21,7 @@ func setupPKIService(t *testing.T) *PKIService {
 	}
 	auditStore := testutil.NewMockAuditStore()
 	auditLogger := audit.NewAuditLogger(auditStore)
-	return NewPKIService(rootCert, rootKey, auditLogger)
+	return NewPKIService(rootCert, rootKey, auditLogger, nil)
 }
 
 func TestPKIService_CreateOrgCA(t *testing.T) {
@@ -108,7 +108,7 @@ func TestPKIService_FullChainVerification(t *testing.T) {
 
 	auditStore := testutil.NewMockAuditStore()
 	auditLogger := audit.NewAuditLogger(auditStore)
-	svc := NewPKIService(rootCert, rootKey, auditLogger)
+	svc := NewPKIService(rootCert, rootKey, auditLogger, nil)
 	ctx := context.Background()
 
 	// Create org CA through service
