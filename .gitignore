@@ -1,3 +1,5 @@
 coverage.out
 /minikms
 /vault-docker
+*.out
+grpc-e2e
