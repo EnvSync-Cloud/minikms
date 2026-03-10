@@ -3,13 +3,17 @@ package service
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
 	"testing"
 	"time"
 
 	"github.com/envsync/minikms/internal/audit"
+	"github.com/envsync/minikms/internal/keys"
 	pkiPkg "github.com/envsync/minikms/internal/pki"
+	"github.com/envsync/minikms/internal/pkistore"
 	"github.com/envsync/minikms/internal/testutil"
 )
 
@@ -171,4 +175,377 @@ func TestPKIService_FullChainVerification(t *testing.T) {
 	if !pubKey.Equal(&memberKey.PublicKey) {
 		t.Fatal("member key doesn't match cert")
 	}
+}
+
+// --- Additional PKI tests for coverage ---
+
+func setupPKIWithStore(t *testing.T) (*PKIService, *x509.Certificate, *ecdsa.PrivateKey, *testutil.MockPKICertStore) {
+	t.Helper()
+	rootCert, rootKey, _, err := pkiPkg.CreateRootCA("Test Root CA", 10*365*24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateRootCA: %v", err)
+	}
+	auditStore := testutil.NewMockAuditStore()
+	auditLogger := audit.NewAuditLogger(auditStore)
+	certStore := testutil.NewMockPKICertStore()
+	svc := NewPKIService(rootCert, rootKey, auditLogger, certStore)
+	return svc, rootCert, rootKey, certStore
+}
+
+func TestRootCert(t *testing.T) {
+	svc, rootCert, _, _ := setupPKIWithStore(t)
+	got := svc.RootCert()
+	if got != rootCert {
+		t.Fatal("RootCert() should return the root certificate")
+	}
+}
+
+func TestSetOrgCAWrapManager(t *testing.T) {
+	svc, _, _, _ := setupPKIWithStore(t)
+	wrapStore := testutil.NewMockOrgCAWrapStore()
+	mgr := keys.NewOrgCAWrapManager(wrapStore)
+	svc.SetOrgCAWrapManager(mgr)
+	if svc.orgCAWrapMgr == nil {
+		t.Fatal("orgCAWrapMgr should be set")
+	}
+}
+
+func TestSetShamirConfig(t *testing.T) {
+	svc, _, _, _ := setupPKIWithStore(t)
+	svc.SetShamirConfig(7, 4)
+	if svc.shamirShares != 7 {
+		t.Errorf("shamirShares = %d, want 7", svc.shamirShares)
+	}
+	if svc.shamirThresh != 4 {
+		t.Errorf("shamirThresh = %d, want 4", svc.shamirThresh)
+	}
+}
+
+func TestRevokeCert(t *testing.T) {
+	svc, _, _, certStore := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	// Create org CA
+	_, orgCACert, orgCAKey, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: "org-001", OrgName: "Test Org",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrgCAFull: %v", err)
+	}
+
+	// Issue member cert
+	memberResp, err := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
+		MemberID: "m1", MemberEmail: "m@test.com", OrgID: "org-001",
+		Role: "admin", OrgCACert: orgCACert, OrgCAKey: orgCAKey,
+	})
+	if err != nil {
+		t.Fatalf("IssueMemberCert: %v", err)
+	}
+
+	// Revoke
+	err = svc.RevokeCert(ctx, &RevokeCertRequest{
+		SerialHex: memberResp.SerialHex, OrgID: "org-001", Reason: 1,
+	})
+	if err != nil {
+		t.Fatalf("RevokeCert: %v", err)
+	}
+
+	// Verify status
+	rec, _ := certStore.GetCertificateBySerial(ctx, memberResp.SerialHex)
+	if rec == nil || rec.Status != "revoked" {
+		t.Error("cert should be revoked")
+	}
+
+	// Revoking again should error
+	err = svc.RevokeCert(ctx, &RevokeCertRequest{
+		SerialHex: memberResp.SerialHex, OrgID: "org-001", Reason: 1,
+	})
+	if err == nil {
+		t.Fatal("expected error revoking already-revoked cert")
+	}
+}
+
+func TestRevokeCert_NotFound(t *testing.T) {
+	svc, _, _, _ := setupPKIWithStore(t)
+	err := svc.RevokeCert(context.Background(), &RevokeCertRequest{
+		SerialHex: "nonexistent", OrgID: "org-001",
+	})
+	if err == nil {
+		t.Fatal("expected error for cert not found")
+	}
+}
+
+func TestRevokeCert_WrongOrg(t *testing.T) {
+	svc, _, _, _ := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	_, orgCACert, orgCAKey, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: "org-001", OrgName: "Test Org",
+	})
+	memberResp, _ := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
+		MemberID: "m1", MemberEmail: "m@test.com", OrgID: "org-001",
+		Role: "member", OrgCACert: orgCACert, OrgCAKey: orgCAKey,
+	})
+
+	err := svc.RevokeCert(ctx, &RevokeCertRequest{
+		SerialHex: memberResp.SerialHex, OrgID: "org-OTHER",
+	})
+	if err == nil {
+		t.Fatal("expected error for wrong org")
+	}
+}
+
+func TestRevokeCert_NilStore(t *testing.T) {
+	auditLogger := audit.NewAuditLogger(&mockAuditStore{})
+	svc := NewPKIService(nil, nil, auditLogger, nil)
+	err := svc.RevokeCert(context.Background(), &RevokeCertRequest{SerialHex: "abc", OrgID: "org-1"})
+	if err == nil {
+		t.Fatal("expected error for nil store")
+	}
+}
+
+func TestGetCRL(t *testing.T) {
+	svc, _, _, _ := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	_, orgCACert, orgCAKey, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: "org-001", OrgName: "Test Org",
+	})
+	memberResp, _ := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
+		MemberID: "m1", MemberEmail: "m@test.com", OrgID: "org-001",
+		Role: "member", OrgCACert: orgCACert, OrgCAKey: orgCAKey,
+	})
+
+	// Revoke the cert
+	_ = svc.RevokeCert(ctx, &RevokeCertRequest{
+		SerialHex: memberResp.SerialHex, OrgID: "org-001", Reason: 1,
+	})
+
+	// Generate CRL
+	crlResp, err := svc.GetCRL(ctx, &GetCRLRequest{
+		OrgID: "org-001", IssuerCert: orgCACert, IssuerKey: orgCAKey,
+	})
+	if err != nil {
+		t.Fatalf("GetCRL: %v", err)
+	}
+	if len(crlResp.CRLDER) == 0 {
+		t.Error("CRL DER is empty")
+	}
+}
+
+func TestGetCRL_NoOrgCA(t *testing.T) {
+	svc, _, _, _ := setupPKIWithStore(t)
+	key, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	_, err := svc.GetCRL(context.Background(), &GetCRLRequest{
+		OrgID: "org-missing", IssuerKey: key,
+	})
+	if err == nil {
+		t.Fatal("expected error for missing org CA")
+	}
+}
+
+func TestGetCRL_NilStore(t *testing.T) {
+	auditLogger := audit.NewAuditLogger(&mockAuditStore{})
+	svc := NewPKIService(nil, nil, auditLogger, nil)
+	_, err := svc.GetCRL(context.Background(), &GetCRLRequest{OrgID: "o"})
+	if err == nil {
+		t.Fatal("expected error for nil store")
+	}
+}
+
+func TestCheckOCSP_Good(t *testing.T) {
+	svc, _, _, _ := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	_, orgCACert, orgCAKey, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: "org-001", OrgName: "Test Org",
+	})
+	memberResp, _ := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
+		MemberID: "m1", MemberEmail: "m@test.com", OrgID: "org-001",
+		Role: "member", OrgCACert: orgCACert, OrgCAKey: orgCAKey,
+	})
+
+	ocsp, err := svc.CheckOCSP(ctx, &CheckOCSPRequest{
+		SerialHex: memberResp.SerialHex, OrgID: "org-001",
+	})
+	if err != nil {
+		t.Fatalf("CheckOCSP: %v", err)
+	}
+	if ocsp.Status != 0 {
+		t.Errorf("Status = %d, want 0 (good)", ocsp.Status)
+	}
+}
+
+func TestCheckOCSP_Revoked(t *testing.T) {
+	svc, _, _, _ := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	_, orgCACert, orgCAKey, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: "org-001", OrgName: "Test Org",
+	})
+	memberResp, _ := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
+		MemberID: "m1", MemberEmail: "m@test.com", OrgID: "org-001",
+		Role: "member", OrgCACert: orgCACert, OrgCAKey: orgCAKey,
+	})
+	_ = svc.RevokeCert(ctx, &RevokeCertRequest{
+		SerialHex: memberResp.SerialHex, OrgID: "org-001", Reason: 1,
+	})
+
+	ocsp, err := svc.CheckOCSP(ctx, &CheckOCSPRequest{
+		SerialHex: memberResp.SerialHex, OrgID: "org-001",
+	})
+	if err != nil {
+		t.Fatalf("CheckOCSP: %v", err)
+	}
+	if ocsp.Status != 1 {
+		t.Errorf("Status = %d, want 1 (revoked)", ocsp.Status)
+	}
+	if ocsp.RevokedAt == "" {
+		t.Error("RevokedAt should not be empty")
+	}
+}
+
+func TestCheckOCSP_Unknown(t *testing.T) {
+	svc, _, _, _ := setupPKIWithStore(t)
+	ocsp, err := svc.CheckOCSP(context.Background(), &CheckOCSPRequest{
+		SerialHex: "nonexistent", OrgID: "org-001",
+	})
+	if err != nil {
+		t.Fatalf("CheckOCSP: %v", err)
+	}
+	if ocsp.Status != 2 {
+		t.Errorf("Status = %d, want 2 (unknown)", ocsp.Status)
+	}
+}
+
+func TestCheckOCSP_WrongOrg(t *testing.T) {
+	svc, _, _, _ := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	_, orgCACert, orgCAKey, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: "org-001", OrgName: "Test Org",
+	})
+	memberResp, _ := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
+		MemberID: "m1", MemberEmail: "m@test.com", OrgID: "org-001",
+		Role: "member", OrgCACert: orgCACert, OrgCAKey: orgCAKey,
+	})
+
+	ocsp, err := svc.CheckOCSP(ctx, &CheckOCSPRequest{
+		SerialHex: memberResp.SerialHex, OrgID: "org-OTHER",
+	})
+	if err != nil {
+		t.Fatalf("CheckOCSP: %v", err)
+	}
+	if ocsp.Status != 2 {
+		t.Errorf("Status = %d, want 2 (unknown) for wrong org", ocsp.Status)
+	}
+}
+
+func TestCheckOCSP_NilStore(t *testing.T) {
+	auditLogger := audit.NewAuditLogger(&mockAuditStore{})
+	svc := NewPKIService(nil, nil, auditLogger, nil)
+	_, err := svc.CheckOCSP(context.Background(), &CheckOCSPRequest{SerialHex: "abc", OrgID: "o"})
+	if err == nil {
+		t.Fatal("expected error for nil store")
+	}
+}
+
+func TestCreateOrgWithWrapping_Managed(t *testing.T) {
+	svc, _, _, _ := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	wrapStore := testutil.NewMockOrgCAWrapStore()
+	mgr := keys.NewOrgCAWrapManager(wrapStore)
+	svc.SetOrgCAWrapManager(mgr)
+
+	resp, err := svc.CreateOrgWithWrapping(ctx, &CreateOrgWithWrappingRequest{
+		OrgID: "org-new", OrgName: "New Org",
+		CreatorMemberID: "creator-001", CreatorEmail: "creator@test.com",
+		CreatorRole: "admin",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrgWithWrapping: %v", err)
+	}
+	if resp.OrgCACertPEM == "" {
+		t.Error("OrgCACertPEM is empty")
+	}
+	if resp.MemberCertPEM == "" {
+		t.Error("MemberCertPEM is empty")
+	}
+	if resp.MemberKeyPEM == "" {
+		t.Error("MemberKeyPEM should be set for managed mode")
+	}
+	if resp.MemberSerial == "" {
+		t.Error("MemberSerial is empty")
+	}
+}
+
+func TestAddMember_NilWrapManager(t *testing.T) {
+	svc, _, _, _ := setupPKIWithStore(t)
+	_, err := svc.AddMember(context.Background(), &AddMemberRequest{
+		OrgID: "org-1", MemberID: "m1", AdminMemberID: "admin-1",
+	})
+	if err == nil {
+		t.Fatal("expected error for nil OrgCAWrapManager")
+	}
+}
+
+func TestIssueMemberCert_WithStore(t *testing.T) {
+	svc, _, _, certStore := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	_, orgCACert, orgCAKey, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: "org-001", OrgName: "Test Org",
+	})
+
+	resp, err := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
+		MemberID: "m1", MemberEmail: "m@test.com", OrgID: "org-001",
+		Role: "admin", OrgCACert: orgCACert, OrgCAKey: orgCAKey,
+	})
+	if err != nil {
+		t.Fatalf("IssueMemberCert: %v", err)
+	}
+
+	// Verify cert was persisted in store
+	rec, _ := certStore.GetCertificateBySerial(ctx, resp.SerialHex)
+	if rec == nil {
+		t.Fatal("member cert should be stored")
+	}
+	if rec.Status != "active" {
+		t.Errorf("Status = %q, want %q", rec.Status, "active")
+	}
+	if rec.CertType != "member" {
+		t.Errorf("CertType = %q, want %q", rec.CertType, "member")
+	}
+}
+
+func TestCreateOrgCAFull_Stored(t *testing.T) {
+	svc, _, _, certStore := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	resp, cert, key, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: "org-001", OrgName: "Test Org",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrgCAFull: %v", err)
+	}
+	if resp == nil || cert == nil || key == nil {
+		t.Fatal("nil return values")
+	}
+
+	// Verify stored in cert store
+	rec, _ := certStore.GetOrgCA(ctx, "org-001")
+	if rec == nil {
+		t.Fatal("org CA should be stored")
+	}
+	if rec.CertType != "org_intermediate_ca" {
+		t.Errorf("CertType = %q, want %q", rec.CertType, "org_intermediate_ca")
+	}
+
+	// Verify stored cert is the same as the one stored via serial
+	recBySerial, _ := certStore.GetCertificateBySerial(ctx, resp.SerialHex)
+	if recBySerial == nil {
+		t.Fatal("org CA cert should be stored by serial")
+	}
+	_ = pkistore.CertRecord{} // verify import is used
 }

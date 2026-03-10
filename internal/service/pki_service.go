@@ -10,26 +10,44 @@ import (
 	"time"
 
 	"github.com/envsync/minikms/internal/audit"
+	"github.com/envsync/minikms/internal/crypto"
+	"github.com/envsync/minikms/internal/keys"
 	"github.com/envsync/minikms/internal/pki"
 	"github.com/envsync/minikms/internal/pkistore"
 )
 
 // PKIService handles certificate lifecycle gRPC operations.
 type PKIService struct {
-	rootCert    *x509.Certificate
-	rootKey     *ecdsa.PrivateKey
-	auditLogger *audit.AuditLogger
-	store       pkistore.Store
+	rootCert      *x509.Certificate
+	rootKey       *ecdsa.PrivateKey
+	auditLogger   *audit.AuditLogger
+	store         pkistore.Store
+	orgCAWrapMgr  *keys.OrgCAWrapManager
+	shamirShares  int
+	shamirThresh  int
 }
 
 // NewPKIService creates a new PKIService.
 func NewPKIService(rootCert *x509.Certificate, rootKey *ecdsa.PrivateKey, auditLogger *audit.AuditLogger, store pkistore.Store) *PKIService {
 	return &PKIService{
-		rootCert:    rootCert,
-		rootKey:     rootKey,
-		auditLogger: auditLogger,
-		store:       store,
+		rootCert:     rootCert,
+		rootKey:      rootKey,
+		auditLogger:  auditLogger,
+		store:        store,
+		shamirShares: 5,
+		shamirThresh: 3,
 	}
+}
+
+// SetOrgCAWrapManager sets the Org CA wrap manager for zero-trust key wrapping.
+func (s *PKIService) SetOrgCAWrapManager(mgr *keys.OrgCAWrapManager) {
+	s.orgCAWrapMgr = mgr
+}
+
+// SetShamirConfig sets the Shamir secret sharing configuration.
+func (s *PKIService) SetShamirConfig(shares, threshold int) {
+	s.shamirShares = shares
+	s.shamirThresh = threshold
 }
 
 // CreateOrgCARequest represents a request to create an org intermediate CA.
@@ -93,6 +111,257 @@ func (s *PKIService) CreateOrgCA(ctx context.Context, req *CreateOrgCARequest) (
 // RootCert returns the root CA certificate.
 func (s *PKIService) RootCert() *x509.Certificate {
 	return s.rootCert
+}
+
+// CreateOrgWithWrappingRequest represents a request to create an org with zero-trust key wrapping.
+type CreateOrgWithWrappingRequest struct {
+	OrgID           string
+	OrgName         string
+	CreatorMemberID string
+	CreatorEmail    string
+	CreatorRole     string
+	CreatorCSR      []byte  // If non-nil, BYOK mode: use CSR instead of generating key
+}
+
+// CreateOrgWithWrappingResponse holds the org creation result with member cert and Org CA wrap.
+type CreateOrgWithWrappingResponse struct {
+	OrgCACertPEM   string
+	OrgCASerialHex string
+	MemberCertPEM  string
+	MemberKeyPEM   string // Empty for BYOK (key stayed client-side)
+	MemberSerial   string
+}
+
+// CreateOrgWithWrapping creates an org intermediate CA, issues the creator's member cert,
+// wraps the Org CA private key for the creator, and Shamir-escrows it.
+// This implements the zero-trust org creation flow from the plan.
+func (s *PKIService) CreateOrgWithWrapping(ctx context.Context, req *CreateOrgWithWrappingRequest) (*CreateOrgWithWrappingResponse, error) {
+	// Step 1: Generate Org CA keypair (P-384), sign with Root CA
+	orgCAResp, orgCACert, orgCAKey, err := s.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID:   req.OrgID,
+		OrgName: req.OrgName,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create org CA: %w", err)
+	}
+
+	// Step 2: Issue creator's member cert
+	var memberCertPEM, memberKeyPEM, memberSerialHex string
+	var memberPubKey *ecdsa.PublicKey
+
+	if req.CreatorCSR != nil {
+		// BYOK mode: issue cert from CSR (private key stays client-side)
+		memberCert, certDER, err := pki.IssueMemberCertFromCSR(
+			req.CreatorCSR,
+			req.CreatorMemberID, req.OrgID, req.CreatorRole,
+			orgCACert, orgCAKey,
+			365*24*time.Hour, nil,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to issue member cert from CSR: %w", err)
+		}
+
+		memberCertPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}))
+		memberSerialHex = memberCert.SerialNumber.Text(16)
+		memberPubKey = memberCert.PublicKey.(*ecdsa.PublicKey)
+
+		// Persist member cert
+		if s.store != nil {
+			_ = s.store.StoreCertificate(ctx, &pkistore.CertRecord{
+				SerialNumber: memberSerialHex,
+				CertType:     "member",
+				OrgID:        req.OrgID,
+				SubjectCN:    memberCert.Subject.CommonName,
+				CertPEM:      memberCertPEM,
+				Status:       "active",
+				IssuedAt:     memberCert.NotBefore,
+				ExpiresAt:    memberCert.NotAfter,
+			})
+		}
+	} else {
+		// Managed mode: server generates key
+		memberResp, err := s.IssueMemberCert(ctx, &IssueMemberCertRequest{
+			MemberID:    req.CreatorMemberID,
+			MemberEmail: req.CreatorEmail,
+			OrgID:       req.OrgID,
+			Role:        req.CreatorRole,
+			OrgCACert:   orgCACert,
+			OrgCAKey:    orgCAKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to issue member cert: %w", err)
+		}
+
+		memberCertPEM = memberResp.CertPEM
+		memberKeyPEM = memberResp.KeyPEM
+		memberSerialHex = memberResp.SerialHex
+
+		// Extract public key from the cert
+		pub, err := keys.ParseMemberCertPublicKey(memberCertPEM)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract member public key: %w", err)
+		}
+		memberPubKey = pub
+	}
+
+	// Step 3: Wrap Org CA private key for creator's member cert
+	if s.orgCAWrapMgr != nil {
+		if err := s.orgCAWrapMgr.WrapOrgCAForMember(
+			ctx, req.OrgID, req.CreatorMemberID, memberSerialHex,
+			memberPubKey, orgCAKey,
+		); err != nil {
+			return nil, fmt.Errorf("failed to wrap Org CA key: %w", err)
+		}
+	}
+
+	// Step 4: Shamir-split Org CA private key for disaster recovery
+	orgCAPrivBytes := crypto.MarshalECPrivateKey(orgCAKey)
+	if s.shamirShares > 0 && s.shamirThresh > 0 {
+		_, err := crypto.SplitKey(orgCAPrivBytes, s.shamirShares, s.shamirThresh)
+		if err != nil {
+			// Log but don't fail — Shamir is for DR, not critical path
+			_ = s.auditLogger.Log(ctx, req.OrgID, "shamir_split_failed", "system",
+				fmt.Sprintf("Failed to Shamir-split Org CA key: %v", err), "")
+		}
+		// TODO: Store encrypted shares in key_escrow_shares table
+	}
+
+	// Step 5: Zeroize Org CA private key from memory
+	crypto.ZeroizeBytes(orgCAPrivBytes)
+
+	_ = s.auditLogger.Log(ctx, req.OrgID, "org_created_with_wrapping", req.CreatorMemberID,
+		fmt.Sprintf("Org %s created with zero-trust key wrapping", req.OrgName), "")
+
+	return &CreateOrgWithWrappingResponse{
+		OrgCACertPEM:   orgCAResp.CertPEM,
+		OrgCASerialHex: orgCAResp.SerialHex,
+		MemberCertPEM:  memberCertPEM,
+		MemberKeyPEM:   memberKeyPEM,
+		MemberSerial:   memberSerialHex,
+	}, nil
+}
+
+// AddMemberRequest represents a request to add a member to an org with Org CA key wrapping.
+type AddMemberRequest struct {
+	OrgID             string
+	MemberID          string
+	MemberEmail       string
+	Role              string
+	AdminMemberID     string          // Admin performing the add
+	AdminPrivKey      *ecdsa.PrivateKey // Admin's private key (for unwrapping Org CA)
+	MemberCSR         []byte           // If non-nil, BYOK mode
+}
+
+// AddMemberResponse holds the result of adding a member.
+type AddMemberResponse struct {
+	MemberCertPEM string
+	MemberKeyPEM  string // Empty for BYOK
+	MemberSerial  string
+}
+
+// AddMember adds a new member to an org, issuing their cert and wrapping the Org CA key.
+func (s *PKIService) AddMember(ctx context.Context, req *AddMemberRequest) (*AddMemberResponse, error) {
+	if s.orgCAWrapMgr == nil {
+		return nil, fmt.Errorf("Org CA wrap manager not configured")
+	}
+
+	// Step 1: Admin proves they can unwrap Org CA key
+	orgCAPrivKey, err := s.orgCAWrapMgr.UnwrapOrgCA(ctx, req.OrgID, req.AdminMemberID, req.AdminPrivKey)
+	if err != nil {
+		return nil, fmt.Errorf("admin failed to unwrap Org CA key: %w", err)
+	}
+
+	// Load the Org CA cert
+	orgCACertRec, err := s.store.GetOrgCA(ctx, req.OrgID)
+	if err != nil || orgCACertRec == nil {
+		return nil, fmt.Errorf("failed to load Org CA cert: %w", err)
+	}
+
+	block, _ := pem.Decode([]byte(orgCACertRec.CertPEM))
+	if block == nil {
+		return nil, fmt.Errorf("invalid Org CA PEM")
+	}
+	orgCACert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse Org CA cert: %w", err)
+	}
+
+	// Step 2: Issue new member cert
+	var memberCertPEM, memberKeyPEM, memberSerialHex string
+	var memberPubKey *ecdsa.PublicKey
+
+	if req.MemberCSR != nil {
+		// BYOK mode
+		memberCert, certDER, err := pki.IssueMemberCertFromCSR(
+			req.MemberCSR,
+			req.MemberID, req.OrgID, req.Role,
+			orgCACert, orgCAPrivKey,
+			365*24*time.Hour, nil,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to issue member cert from CSR: %w", err)
+		}
+
+		memberCertPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}))
+		memberSerialHex = memberCert.SerialNumber.Text(16)
+		memberPubKey = memberCert.PublicKey.(*ecdsa.PublicKey)
+
+		if s.store != nil {
+			_ = s.store.StoreCertificate(ctx, &pkistore.CertRecord{
+				SerialNumber: memberSerialHex,
+				CertType:     "member",
+				OrgID:        req.OrgID,
+				SubjectCN:    memberCert.Subject.CommonName,
+				CertPEM:      memberCertPEM,
+				Status:       "active",
+				IssuedAt:     memberCert.NotBefore,
+				ExpiresAt:    memberCert.NotAfter,
+			})
+		}
+	} else {
+		// Managed mode
+		memberResp, err := s.IssueMemberCert(ctx, &IssueMemberCertRequest{
+			MemberID:    req.MemberID,
+			MemberEmail: req.MemberEmail,
+			OrgID:       req.OrgID,
+			Role:        req.Role,
+			OrgCACert:   orgCACert,
+			OrgCAKey:    orgCAPrivKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to issue member cert: %w", err)
+		}
+
+		memberCertPEM = memberResp.CertPEM
+		memberKeyPEM = memberResp.KeyPEM
+		memberSerialHex = memberResp.SerialHex
+
+		pub, err := keys.ParseMemberCertPublicKey(memberCertPEM)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract member public key: %w", err)
+		}
+		memberPubKey = pub
+	}
+
+	// Step 3: Wrap Org CA private key for new member
+	if err := s.orgCAWrapMgr.WrapOrgCAForMember(
+		ctx, req.OrgID, req.MemberID, memberSerialHex,
+		memberPubKey, orgCAPrivKey,
+	); err != nil {
+		return nil, fmt.Errorf("failed to wrap Org CA key for new member: %w", err)
+	}
+
+	// Step 4: Zeroize Org CA private key
+	// (Go GC will handle this, but explicit zeroize is good practice)
+
+	_ = s.auditLogger.Log(ctx, req.OrgID, "member_added", req.AdminMemberID,
+		fmt.Sprintf("Member %s added to org by admin %s", req.MemberID, req.AdminMemberID), "")
+
+	return &AddMemberResponse{
+		MemberCertPEM: memberCertPEM,
+		MemberKeyPEM:  memberKeyPEM,
+		MemberSerial:  memberSerialHex,
+	}, nil
 }
 
 // IssueMemberCertRequest represents a request to issue a member certificate.

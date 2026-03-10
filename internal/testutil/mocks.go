@@ -5,11 +5,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/envsync/minikms/internal/audit"
 	"github.com/envsync/minikms/internal/auth"
 	"github.com/envsync/minikms/internal/crypto"
 	"github.com/envsync/minikms/internal/keys"
+	"github.com/envsync/minikms/internal/pkistore"
+	"github.com/envsync/minikms/internal/store"
 )
 
 // MockDEKStore is an in-memory implementation of keys.DEKStore for testing.
@@ -247,6 +250,230 @@ func SetupTestKMSStack(rootKeyHex string) (
 	auditLogger := audit.NewAuditLogger(auditStore)
 
 	return holder, orgKeyMgr, dekMgr, dekStore, auditLogger, auditStore, nil
+}
+
+// MockPKICertStore is an in-memory implementation of pkistore.Store for testing.
+type MockPKICertStore struct {
+	mu    sync.RWMutex
+	certs map[string]*CertRecord // keyed by serial
+	orgCA map[string]*CertRecord // keyed by orgID
+	crls  map[string][]CRLEntryRecord
+}
+
+// CertRecord mirrors pkistore.CertRecord to avoid circular imports.
+type CertRecord = pkistore.CertRecord
+
+// CRLEntryRecord mirrors pkistore.CRLEntryRecord.
+type CRLEntryRecord = pkistore.CRLEntryRecord
+
+func NewMockPKICertStore() *MockPKICertStore {
+	return &MockPKICertStore{
+		certs: make(map[string]*CertRecord),
+		orgCA: make(map[string]*CertRecord),
+		crls:  make(map[string][]CRLEntryRecord),
+	}
+}
+
+func (m *MockPKICertStore) StoreCertificate(_ context.Context, rec *CertRecord) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := *rec
+	m.certs[rec.SerialNumber] = &cp
+	if rec.CertType == "org_intermediate_ca" {
+		m.orgCA[rec.OrgID] = &cp
+	}
+	return nil
+}
+
+func (m *MockPKICertStore) StoreCertificateWithKey(_ context.Context, rec *CertRecord) error {
+	return m.StoreCertificate(context.Background(), rec)
+}
+
+func (m *MockPKICertStore) GetCertificateBySerial(_ context.Context, serial string) (*CertRecord, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	rec, ok := m.certs[serial]
+	if !ok {
+		return nil, nil
+	}
+	cp := *rec
+	return &cp, nil
+}
+
+func (m *MockPKICertStore) GetCertificateBySerialWithKey(_ context.Context, serial string) (*CertRecord, error) {
+	return m.GetCertificateBySerial(context.Background(), serial)
+}
+
+func (m *MockPKICertStore) GetOrgCA(_ context.Context, orgID string) (*CertRecord, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	rec, ok := m.orgCA[orgID]
+	if !ok {
+		return nil, nil
+	}
+	cp := *rec
+	return &cp, nil
+}
+
+func (m *MockPKICertStore) UpdateCertificateStatus(_ context.Context, serial, status string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rec, ok := m.certs[serial]
+	if !ok {
+		return fmt.Errorf("cert not found: %s", serial)
+	}
+	rec.Status = status
+	return nil
+}
+
+func (m *MockPKICertStore) InsertCRLEntry(_ context.Context, entry *CRLEntryRecord) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.crls[entry.IssuerSerial] = append(m.crls[entry.IssuerSerial], *entry)
+	return nil
+}
+
+func (m *MockPKICertStore) GetCRLEntries(_ context.Context, issuerSerial string) ([]CRLEntryRecord, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.crls[issuerSerial], nil
+}
+
+func (m *MockPKICertStore) GetNextCRLNumber(_ context.Context, _ string) (int64, error) {
+	return 1, nil
+}
+
+func (m *MockPKICertStore) GetCertRevocationEntry(_ context.Context, serial string) (*CRLEntryRecord, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, entries := range m.crls {
+		for _, e := range entries {
+			if e.CertSerial == serial {
+				cp := e
+				return &cp, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+// MockOrgCAWrapStore is an in-memory implementation of keys.OrgCAWrapStore for testing.
+type MockOrgCAWrapStore struct {
+	mu    sync.RWMutex
+	wraps map[string]*keys.OrgCAWrapRecord // keyed by "orgID:memberID"
+}
+
+func NewMockOrgCAWrapStore() *MockOrgCAWrapStore {
+	return &MockOrgCAWrapStore{
+		wraps: make(map[string]*keys.OrgCAWrapRecord),
+	}
+}
+
+func (m *MockOrgCAWrapStore) StoreOrgCAWrap(_ context.Context, record *keys.OrgCAWrapRecord) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := record.OrgID + ":" + record.MemberID
+	if record.ID == "" {
+		record.ID = fmt.Sprintf("wrap-%d", len(m.wraps)+1)
+	}
+	cp := *record
+	m.wraps[key] = &cp
+	return nil
+}
+
+func (m *MockOrgCAWrapStore) GetOrgCAWrap(_ context.Context, orgID, memberID string) (*keys.OrgCAWrapRecord, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	key := orgID + ":" + memberID
+	rec, ok := m.wraps[key]
+	if !ok {
+		return nil, nil
+	}
+	cp := *rec
+	return &cp, nil
+}
+
+func (m *MockOrgCAWrapStore) GetOrgCAWraps(_ context.Context, orgID string) ([]*keys.OrgCAWrapRecord, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var result []*keys.OrgCAWrapRecord
+	for k, v := range m.wraps {
+		if len(k) > len(orgID) && k[:len(orgID)+1] == orgID+":" {
+			cp := *v
+			result = append(result, &cp)
+		}
+	}
+	return result, nil
+}
+
+func (m *MockOrgCAWrapStore) RevokeOrgCAWrap(_ context.Context, orgID, memberID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := orgID + ":" + memberID
+	rec, ok := m.wraps[key]
+	if !ok {
+		return fmt.Errorf("wrap not found: %s", key)
+	}
+	now := time.Now()
+	rec.RevokedAt = &now
+	return nil
+}
+
+// MockPolicyStore provides the methods SessionService needs from store.PostgresStore.
+type MockPolicyStore struct {
+	mu       sync.RWMutex
+	policies map[string]*OrgSecurityPolicy
+	tokens   map[string][]*auth.TokenEntry // keyed by subjectHash
+}
+
+// OrgSecurityPolicy mirrors store.OrgSecurityPolicy to avoid circular imports.
+type OrgSecurityPolicy = store.OrgSecurityPolicy
+
+func NewMockPolicyStore() *MockPolicyStore {
+	return &MockPolicyStore{
+		policies: make(map[string]*OrgSecurityPolicy),
+		tokens:   make(map[string][]*auth.TokenEntry),
+	}
+}
+
+func (m *MockPolicyStore) GetOrgSecurityPolicy(_ context.Context, orgID string) (*OrgSecurityPolicy, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	p, ok := m.policies[orgID]
+	if !ok {
+		return &OrgSecurityPolicy{
+			OrgID:              orgID,
+			SessionDurationSec: 28800,
+			MaxSessionTokens:   10,
+		}, nil
+	}
+	cp := *p
+	return &cp, nil
+}
+
+func (m *MockPolicyStore) GetTokensBySubject(_ context.Context, subjectHash string) ([]*auth.TokenEntry, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entries := m.tokens[subjectHash]
+	result := make([]*auth.TokenEntry, len(entries))
+	for i, e := range entries {
+		cp := *e
+		result[i] = &cp
+	}
+	return result, nil
+}
+
+func (m *MockPolicyStore) RevokeTokensBySubject(_ context.Context, subjectHash string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	count := 0
+	for _, e := range m.tokens[subjectHash] {
+		if !e.Revoked {
+			e.Revoked = true
+			count++
+		}
+	}
+	return count, nil
 }
 
 // TestRootKeyHex is a fixed 256-bit key for deterministic testing.
