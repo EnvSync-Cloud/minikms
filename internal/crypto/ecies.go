@@ -57,7 +57,10 @@ func ECIESEncrypt(recipientPub *ecdsa.PublicKey, plaintext []byte, salt, info st
 	}
 
 	// Serialize ephemeral public key (uncompressed)
-	ephPubBytes := elliptic.Marshal(elliptic.P384(), ephPriv.PublicKey.X, ephPriv.PublicKey.Y)
+	ephPubBytes, err := marshalECPublicKey(&ephPriv.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal ephemeral public key: %w", err)
+	}
 
 	// Zeroize ephemeral private key
 	// Note: Go's ecdsa.PrivateKey doesn't expose raw bytes easily,
@@ -90,14 +93,9 @@ func ECIESDecrypt(recipientPriv *ecdsa.PrivateKey, ciphertext []byte, salt, info
 	ephPubBytes := ciphertext[:P384PubKeySize]
 	encryptedData := ciphertext[P384PubKeySize:]
 
-	x, y := elliptic.Unmarshal(elliptic.P384(), ephPubBytes)
-	if x == nil {
-		return nil, fmt.Errorf("invalid ephemeral public key")
-	}
-	ephPub := &ecdsa.PublicKey{
-		Curve: elliptic.P384(),
-		X:     x,
-		Y:     y,
+	ephPub, err := unmarshalECPublicKey(elliptic.P384(), ephPubBytes)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ephemeral public key: %w", err)
 	}
 
 	// Perform ECDH
@@ -156,8 +154,10 @@ func WrapKeyForMember(memberPub *ecdsa.PublicKey, orgCAPrivKeyBytes []byte) (eph
 	}
 
 	// Serialize ephemeral public key
-	curve := ephPriv.PublicKey.Curve
-	ephPubBytes := elliptic.Marshal(curve, ephPriv.PublicKey.X, ephPriv.PublicKey.Y)
+	ephPubBytes, err := marshalECPublicKey(&ephPriv.PublicKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to marshal ephemeral public key: %w", err)
+	}
 
 	return ephPubBytes, wrappedKey, nil
 }
@@ -166,25 +166,18 @@ func WrapKeyForMember(memberPub *ecdsa.PublicKey, orgCAPrivKeyBytes []byte) (eph
 // and the stored ephemeral public key.
 func UnwrapKeyForMember(memberPriv *ecdsa.PrivateKey, ephemeralPub []byte, wrappedKey []byte) ([]byte, error) {
 	// Parse ephemeral public key — use the member's curve (ephemeral was generated on same curve)
-	curve := memberPriv.Curve
-	x, y := elliptic.Unmarshal(curve, ephemeralPub)
-	if x == nil {
+	ephPub, err := unmarshalECPublicKey(memberPriv.Curve, ephemeralPub)
+	if err != nil {
 		// Fallback: try other curves
 		for _, c := range []elliptic.Curve{elliptic.P256(), elliptic.P384()} {
-			x, y = elliptic.Unmarshal(c, ephemeralPub)
-			if x != nil {
-				curve = c
+			ephPub, err = unmarshalECPublicKey(c, ephemeralPub)
+			if err == nil {
 				break
 			}
 		}
-		if x == nil {
+		if err != nil {
 			return nil, fmt.Errorf("invalid ephemeral public key")
 		}
-	}
-	ephPub := &ecdsa.PublicKey{
-		Curve: curve,
-		X:     x,
-		Y:     y,
 	}
 
 	// Perform ECDH
@@ -211,57 +204,22 @@ func UnwrapKeyForMember(memberPriv *ecdsa.PrivateKey, ephemeralPub []byte, wrapp
 }
 
 // ecdhSharedSecret computes a shared secret using ECDH.
-// Supports cross-curve ECDH by converting to crypto/ecdh types.
 func ecdhSharedSecret(priv *ecdsa.PrivateKey, pub *ecdsa.PublicKey) ([]byte, error) {
-	// Convert ecdsa keys to ecdh keys for proper ECDH
-	var privCurve, pubCurve ecdh.Curve
-
-	switch priv.Curve {
-	case elliptic.P256():
-		privCurve = ecdh.P256()
-	case elliptic.P384():
-		privCurve = ecdh.P384()
-	default:
-		return nil, fmt.Errorf("unsupported private key curve")
-	}
-
-	switch pub.Curve {
-	case elliptic.P256():
-		pubCurve = ecdh.P256()
-	case elliptic.P384():
-		pubCurve = ecdh.P384()
-	default:
+	pubCurve, err := ecdhCurveFromElliptic(pub.Curve)
+	if err != nil {
 		return nil, fmt.Errorf("unsupported public key curve")
 	}
 
-	// For cross-curve ECDH, we use scalar multiplication directly
-	if privCurve != pubCurve {
-		// Cross-curve: use the public key's curve for scalar multiplication
-		x, _ := pub.Curve.ScalarMult(pub.X, pub.Y, priv.D.Bytes())
-		if x == nil {
-			return nil, fmt.Errorf("ECDH scalar multiplication failed")
-		}
-		// Use x-coordinate as shared secret, padded to curve size
-		byteLen := (pub.Curve.Params().BitSize + 7) / 8
-		shared := x.Bytes()
-		if len(shared) < byteLen {
-			padded := make([]byte, byteLen)
-			copy(padded[byteLen-len(shared):], shared)
-			shared = padded
-		}
-		return shared, nil
-	}
-
-	// Same-curve: use crypto/ecdh for safe ECDH
-	ecdhPriv, err := privCurve.NewPrivateKey(priv.D.FillBytes(make([]byte, (priv.Curve.Params().BitSize+7)/8)))
+	// Convert keys to crypto/ecdh types
+	ecdhPriv, err := priv.ECDH()
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert private key: %w", err)
 	}
 
-	pubBytes := elliptic.Marshal(pub.Curve, pub.X, pub.Y)
-	// Convert uncompressed point to ECDH format (remove 0x04 prefix for crypto/ecdh)
-	// Actually crypto/ecdh.NewPublicKey expects the uncompressed point without the 0x04
-	// No — for P-256/P-384, crypto/ecdh expects the full uncompressed point
+	pubBytes, err := marshalECPublicKey(pub)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal public key: %w", err)
+	}
 	ecdhPub, err := pubCurve.NewPublicKey(pubBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert public key: %w", err)
@@ -273,6 +231,58 @@ func ecdhSharedSecret(priv *ecdsa.PrivateKey, pub *ecdsa.PublicKey) ([]byte, err
 	}
 
 	return shared, nil
+}
+
+// ecdhCurveFromElliptic maps an elliptic.Curve to a crypto/ecdh.Curve.
+func ecdhCurveFromElliptic(c elliptic.Curve) (ecdh.Curve, error) {
+	switch c {
+	case elliptic.P256():
+		return ecdh.P256(), nil
+	case elliptic.P384():
+		return ecdh.P384(), nil
+	default:
+		return nil, fmt.Errorf("unsupported curve")
+	}
+}
+
+// marshalECPublicKey serializes an ECDSA public key to uncompressed point format
+// using crypto/ecdh, avoiding the deprecated elliptic.Marshal.
+func marshalECPublicKey(pub *ecdsa.PublicKey) ([]byte, error) {
+	ecdhPub, err := pub.ECDH()
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert to ECDH public key: %w", err)
+	}
+	return ecdhPub.Bytes(), nil
+}
+
+// unmarshalECPublicKey parses an uncompressed point into an ecdsa.PublicKey,
+// using crypto/ecdh for validation instead of the deprecated elliptic.Unmarshal.
+func unmarshalECPublicKey(curve elliptic.Curve, data []byte) (*ecdsa.PublicKey, error) {
+	ecdhCurve, err := ecdhCurveFromElliptic(curve)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate the point using crypto/ecdh
+	ecdhPub, err := ecdhCurve.NewPublicKey(data)
+	if err != nil {
+		return nil, fmt.Errorf("invalid public key point: %w", err)
+	}
+
+	// Parse X, Y from uncompressed format: 0x04 || X || Y
+	raw := ecdhPub.Bytes()
+	if len(raw) < 3 || raw[0] != 0x04 {
+		return nil, fmt.Errorf("unexpected public key format")
+	}
+	byteLen := (len(raw) - 1) / 2
+	x := new(big.Int).SetBytes(raw[1 : 1+byteLen])
+	y := new(big.Int).SetBytes(raw[1+byteLen:])
+
+	return &ecdsa.PublicKey{
+		Curve: curve,
+		X:     x,
+		Y:     y,
+	}, nil
 }
 
 // deriveHKDF derives a 32-byte AES-256 key from a shared secret using HKDF-SHA256.
