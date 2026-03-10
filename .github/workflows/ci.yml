@@ -94,7 +94,9 @@ jobs:
       - name: Run migrations
         env:
           MINIKMS_DB_URL: postgres://minikms_test:testpass@localhost:5432/minikms_test?sslmode=disable
-        run: psql "$MINIKMS_DB_URL" -f migrations/001_initial_schema.sql
+        run: |
+          psql "$MINIKMS_DB_URL" -f migrations/001_initial_schema.sql
+          psql "$MINIKMS_DB_URL" -f migrations/002_vault_storage.sql
       - name: Run E2E tests
         env:
           MINIKMS_DB_URL: postgres://minikms_test:testpass@localhost:5432/minikms_test?sslmode=disable
@@ -127,22 +129,8 @@ jobs:
             fi
             sleep 1
           done
-      - name: Wait for Vault
-        run: |
-          for i in $(seq 1 30); do
-            if nc -z localhost 8200 2>/dev/null; then
-              echo "Vault is ready"
-              break
-            fi
-            if [ "$i" -eq 30 ]; then
-              echo "Vault did not become ready"
-              docker compose -f docker-compose.test.yaml logs vault
-              exit 1
-            fi
-            sleep 1
-          done
       - name: Run gRPC client example
-        run: go run ./examples/vault-docker/
+        run: go run ./examples/grpc-e2e/
       - name: Cleanup
         if: always()
         run: docker compose -f docker-compose.test.yaml down -v --remove-orphans

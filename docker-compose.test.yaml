@@ -36,7 +36,12 @@ services:
       - ./migrations:/migrations:ro
     environment:
       PGPASSWORD: testpass
-    entrypoint: ["psql", "-h", "postgres-test", "-U", "minikms_test", "-d", "minikms_test", "-f", "/migrations/001_initial_schema.sql"]
+    entrypoint:
+      - sh
+      - -c
+      - |
+        psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/001_initial_schema.sql &&
+        psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/002_vault_storage.sql
 
   minikms:
     build: .
