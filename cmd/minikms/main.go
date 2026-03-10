@@ -76,16 +76,48 @@ func main() {
 	}
 	log.Println("PKI root CA generated")
 
+	// Initialize Org CA wrap manager
+	orgCAWrapMgr := keys.NewOrgCAWrapManager(pgStore)
+
+	// Generate session signing key (P-256 for JWT ES256)
+	sessionSigningKey, err := service.GenerateSessionSigningKey()
+	if err != nil {
+		log.Fatalf("Failed to generate session signing key: %v", err)
+	}
+	log.Println("Session signing key generated")
+
 	// Initialize services
 	kmsSvc := service.NewKMSService(dekManager, auditLogger)
 	keySvc := service.NewKeyService(dekManager, versionManager, auditLogger)
 	auditSvc := service.NewAuditService(auditLogger, pgStore)
 	pkiSvc := service.NewPKIService(rootCert, rootKey, auditLogger, pgStore)
+	pkiSvc.SetOrgCAWrapManager(orgCAWrapMgr)
+	pkiSvc.SetShamirConfig(cfg.ShamirTotalShares, cfg.ShamirThreshold)
+
+	sessionSvc := service.NewSessionService(
+		sessionSigningKey,
+		"minikms",
+		8*time.Hour, // default session TTL
+		pgStore,     // token registry
+		pgStore,     // cert store
+		pgStore,     // policy store
+		auditLogger,
+	)
+
+	vaultSvc := service.NewVaultService(
+		dekManager,
+		orgCAWrapMgr,
+		pgStore,
+		auditLogger,
+		sessionSvc,
+	)
 
 	// Create gRPC adapters
 	kmsAdapter := grpcadapter.NewKMSAdapter(kmsSvc, keySvc)
 	pkiAdapter := grpcadapter.NewPKIAdapter(pkiSvc)
 	auditAdapter := grpcadapter.NewAuditAdapter(auditSvc)
+	vaultAdapter := grpcadapter.NewVaultAdapter(vaultSvc)
+	sessionAdapter := grpcadapter.NewSessionAdapter(sessionSvc)
 
 	// Create gRPC server
 	var opts []grpc.ServerOption
@@ -103,6 +135,8 @@ func main() {
 	pb.RegisterKMSServiceServer(grpcServer, kmsAdapter)
 	pb.RegisterPKIServiceServer(grpcServer, pkiAdapter)
 	pb.RegisterAuditServiceServer(grpcServer, auditAdapter)
+	pb.RegisterVaultServiceServer(grpcServer, vaultAdapter)
+	pb.RegisterSessionServiceServer(grpcServer, sessionAdapter)
 
 	// Register health check
 	healthServer := health.NewServer()
