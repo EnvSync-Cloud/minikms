@@ -11,8 +11,29 @@ import (
 	"github.com/envsync/minikms/internal/audit"
 	"github.com/envsync/minikms/internal/crypto"
 	"github.com/envsync/minikms/internal/keys"
+	"github.com/envsync/minikms/internal/pkistore"
 	"github.com/envsync/minikms/internal/store"
 )
+
+// VaultStore abstracts the database operations needed by VaultService.
+type VaultStore interface {
+	// PKI cert lookups
+	GetOrgCA(ctx context.Context, orgID string) (*pkistore.CertRecord, error)
+	GetCertificateBySerialWithKey(ctx context.Context, serialNumber string) (*pkistore.CertRecord, error)
+
+	// Org CA wrap lookups
+	GetOrgCAWrap(ctx context.Context, orgID, memberID string) (*keys.OrgCAWrapRecord, error)
+
+	// Vault entry CRUD
+	WriteVaultEntry(ctx context.Context, entry *store.VaultEntry) error
+	GetLatestVaultEntry(ctx context.Context, orgID, scopeID, entryType, key string, envTypeID *string) (*store.VaultEntry, error)
+	GetVaultEntryVersion(ctx context.Context, orgID, scopeID, entryType, key string, envTypeID *string, version int) (*store.VaultEntry, error)
+	GetNextVaultVersion(ctx context.Context, orgID, scopeID, entryType, key string, envTypeID *string) (int, error)
+	SoftDeleteVaultEntry(ctx context.Context, orgID, scopeID, entryType, key string, envTypeID *string) error
+	DestroyVaultEntry(ctx context.Context, orgID, scopeID, entryType, key string, envTypeID *string, version int) (int, error)
+	ListVaultEntries(ctx context.Context, orgID, scopeID, entryType string, envTypeID *string) ([]store.VaultListItem, error)
+	GetVaultEntryHistory(ctx context.Context, orgID, scopeID, entryType, key string, envTypeID *string) ([]*store.VaultEntry, error)
+}
 
 // VaultService provides zero-trust secret storage, replacing HashiCorp Vault KV v2.
 // It implements the 3-layer encryption pipeline:
@@ -22,7 +43,7 @@ import (
 type VaultService struct {
 	dekManager     *keys.AppDEKManager
 	orgCAWrapMgr   *keys.OrgCAWrapManager
-	pgStore        *store.PostgresStore // implements both pkistore.Store and vault queries
+	vaultStore     VaultStore
 	auditLogger    *audit.AuditLogger
 	sessionService *SessionService
 }
@@ -31,14 +52,14 @@ type VaultService struct {
 func NewVaultService(
 	dekManager *keys.AppDEKManager,
 	orgCAWrapMgr *keys.OrgCAWrapManager,
-	pgStore *store.PostgresStore,
+	vaultStore VaultStore,
 	auditLogger *audit.AuditLogger,
 	sessionService *SessionService,
 ) *VaultService {
 	return &VaultService{
 		dekManager:     dekManager,
 		orgCAWrapMgr:   orgCAWrapMgr,
-		pgStore:        pgStore,
+		vaultStore:     vaultStore,
 		auditLogger:    auditLogger,
 		sessionService: sessionService,
 	}
@@ -106,7 +127,7 @@ func (v *VaultService) Write(ctx context.Context, sessionToken string, req *Vaul
 	}
 
 	// Get next version
-	version, err := v.pgStore.GetNextVaultVersion(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID)
+	version, err := v.vaultStore.GetNextVaultVersion(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get next version: %w", err)
 	}
@@ -124,7 +145,7 @@ func (v *VaultService) Write(ctx context.Context, sessionToken string, req *Vaul
 		CreatedBy:      &req.CreatedBy,
 	}
 
-	if err := v.pgStore.WriteVaultEntry(ctx, entry); err != nil {
+	if err := v.vaultStore.WriteVaultEntry(ctx, entry); err != nil {
 		return nil, fmt.Errorf("failed to write vault entry: %w", err)
 	}
 
@@ -184,7 +205,7 @@ func (v *VaultService) Read(ctx context.Context, sessionToken string, req *Vault
 	}
 
 	// Fetch entry
-	entry, err := v.pgStore.GetLatestVaultEntry(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID)
+	entry, err := v.vaultStore.GetLatestVaultEntry(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read vault entry: %w", err)
 	}
@@ -221,7 +242,7 @@ func (v *VaultService) ReadVersion(ctx context.Context, sessionToken string, req
 	}
 
 	// Fetch specific version
-	entry, err := v.pgStore.GetVaultEntryVersion(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID, req.Version)
+	entry, err := v.vaultStore.GetVaultEntryVersion(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID, req.Version)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read vault entry version: %w", err)
 	}
@@ -255,7 +276,7 @@ func (v *VaultService) Delete(ctx context.Context, sessionToken string, req *Vau
 		return fmt.Errorf("session org mismatch")
 	}
 
-	if err := v.pgStore.SoftDeleteVaultEntry(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID); err != nil {
+	if err := v.vaultStore.SoftDeleteVaultEntry(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID); err != nil {
 		return fmt.Errorf("failed to delete vault entry: %w", err)
 	}
 
@@ -292,7 +313,7 @@ func (v *VaultService) Destroy(ctx context.Context, sessionToken string, req *Va
 		return 0, fmt.Errorf("session org mismatch")
 	}
 
-	count, err := v.pgStore.DestroyVaultEntry(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID, req.Version)
+	count, err := v.vaultStore.DestroyVaultEntry(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID, req.Version)
 	if err != nil {
 		return 0, fmt.Errorf("failed to destroy vault entry: %w", err)
 	}
@@ -330,7 +351,7 @@ func (v *VaultService) List(ctx context.Context, sessionToken string, req *Vault
 		return nil, fmt.Errorf("session org mismatch")
 	}
 
-	entries, err := v.pgStore.ListVaultEntries(ctx, req.OrgID, req.ScopeID, req.EntryType, req.EnvTypeID)
+	entries, err := v.vaultStore.ListVaultEntries(ctx, req.OrgID, req.ScopeID, req.EntryType, req.EnvTypeID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list vault entries: %w", err)
 	}
@@ -376,7 +397,7 @@ func (v *VaultService) History(ctx context.Context, sessionToken string, req *Va
 		return nil, fmt.Errorf("session org mismatch")
 	}
 
-	entries, err := v.pgStore.GetVaultEntryHistory(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID)
+	entries, err := v.vaultStore.GetVaultEntryHistory(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get vault history: %w", err)
 	}
@@ -401,7 +422,7 @@ func (v *VaultService) History(ctx context.Context, sessionToken string, req *Va
 // getOrgCAPublicKey retrieves the Org CA's public key from the certificates table.
 // The public key is always available (stored in the cert) — no session needed for encrypt.
 func (v *VaultService) getOrgCAPublicKey(ctx context.Context, orgID string) (*ecdsa.PublicKey, error) {
-	certRecord, err := v.pgStore.GetOrgCA(ctx, orgID)
+	certRecord, err := v.vaultStore.GetOrgCA(ctx, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Org CA cert: %w", err)
 	}
@@ -497,7 +518,7 @@ func (v *VaultService) decryptEntry(ctx context.Context, session *ValidateSessio
 // stored in the certificates table.
 func (v *VaultService) unwrapOrgCAForManagedMember(ctx context.Context, orgID, memberID string) (*ecdsa.PrivateKey, error) {
 	// Get the member's wrap record to find their cert serial
-	wrapRecord, err := v.pgStore.GetOrgCAWrap(ctx, orgID, memberID)
+	wrapRecord, err := v.vaultStore.GetOrgCAWrap(ctx, orgID, memberID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Org CA wrap: %w", err)
 	}
@@ -506,14 +527,14 @@ func (v *VaultService) unwrapOrgCAForManagedMember(ctx context.Context, orgID, m
 	}
 
 	// Load member's encrypted private key using the cert serial from the wrap
-	certRecord, err := v.pgStore.GetCertificateBySerialWithKey(ctx, wrapRecord.CertSerial)
+	certRecord, err := v.vaultStore.GetCertificateBySerialWithKey(ctx, wrapRecord.CertSerial)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get member certificate: %w", err)
 	}
 	if certRecord == nil {
 		return nil, fmt.Errorf("member certificate not found: %s", wrapRecord.CertSerial)
 	}
-	if certRecord.EncryptedPrivateKey == nil || len(certRecord.EncryptedPrivateKey) == 0 {
+	if len(certRecord.EncryptedPrivateKey) == 0 {
 		return nil, fmt.Errorf("member %s does not have a managed private key (BYOK member?)", memberID)
 	}
 

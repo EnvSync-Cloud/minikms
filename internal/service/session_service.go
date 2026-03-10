@@ -21,6 +21,13 @@ import (
 	"github.com/envsync/minikms/internal/store"
 )
 
+// SessionPolicyStore defines the policy/token methods SessionService needs from the store.
+type SessionPolicyStore interface {
+	GetOrgSecurityPolicy(ctx context.Context, orgID string) (*store.OrgSecurityPolicy, error)
+	GetTokensBySubject(ctx context.Context, subjectHash string) ([]*auth.TokenEntry, error)
+	RevokeTokensBySubject(ctx context.Context, subjectHash string) (int, error)
+}
+
 // SessionService manages time-based session tokens tied to member certificates.
 type SessionService struct {
 	signingKey  *ecdsa.PrivateKey // Ed25519-equivalent: ECDSA P-256 for JWT signing
@@ -28,7 +35,7 @@ type SessionService struct {
 	defaultTTL  time.Duration
 	registry    auth.TokenRegistry
 	certStore   pkistore.Store
-	policyStore *store.PostgresStore
+	policyStore SessionPolicyStore
 	auditLogger *audit.AuditLogger
 }
 
@@ -39,7 +46,7 @@ func NewSessionService(
 	defaultTTL time.Duration,
 	registry auth.TokenRegistry,
 	certStore pkistore.Store,
-	policyStore *store.PostgresStore,
+	policyStore SessionPolicyStore,
 	auditLogger *audit.AuditLogger,
 ) *SessionService {
 	return &SessionService{
