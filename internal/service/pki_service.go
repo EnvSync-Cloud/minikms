@@ -44,6 +44,14 @@ func (s *PKIService) SetOrgCAWrapManager(mgr *keys.OrgCAWrapManager) {
 	s.orgCAWrapMgr = mgr
 }
 
+// WrapOrgCAForMember wraps the Org CA private key for a specific member.
+func (s *PKIService) WrapOrgCAForMember(ctx context.Context, orgID, memberID, certSerial string, memberPub *ecdsa.PublicKey, orgCAKey *ecdsa.PrivateKey) error {
+	if s.orgCAWrapMgr == nil {
+		return nil
+	}
+	return s.orgCAWrapMgr.WrapOrgCAForMember(ctx, orgID, memberID, certSerial, memberPub, orgCAKey)
+}
+
 // SetShamirConfig sets the Shamir secret sharing configuration.
 func (s *PKIService) SetShamirConfig(shares, threshold int) {
 	s.shamirShares = shares
@@ -404,17 +412,18 @@ func (s *PKIService) IssueMemberCert(ctx context.Context, req *IssueMemberCertRe
 	cert, _ := x509.ParseCertificate(certDER)
 	serialHex := cert.SerialNumber.Text(16)
 
-	// Persist to database
+	// Persist to database (include private key for managed members)
 	if s.store != nil {
-		_ = s.store.StoreCertificate(ctx, &pkistore.CertRecord{
-			SerialNumber: serialHex,
-			CertType:     "member",
-			OrgID:        req.OrgID,
-			SubjectCN:    req.MemberEmail,
-			CertPEM:      string(certPEM),
-			Status:       "active",
-			IssuedAt:     cert.NotBefore,
-			ExpiresAt:    cert.NotAfter,
+		_ = s.store.StoreCertificateWithKey(ctx, &pkistore.CertRecord{
+			SerialNumber:        serialHex,
+			CertType:            "member",
+			OrgID:               req.OrgID,
+			SubjectCN:           req.MemberEmail,
+			CertPEM:             string(certPEM),
+			EncryptedPrivateKey: crypto.MarshalECPrivateKey(memberKey),
+			Status:              "active",
+			IssuedAt:            cert.NotBefore,
+			ExpiresAt:           cert.NotAfter,
 		})
 	}
 

@@ -626,6 +626,191 @@ func TestVaultDestroy_NotAdmin(t *testing.T) {
 	}
 }
 
+// --- Vault Destroy (full lifecycle) tests ---
+
+func TestVaultDestroy_Success(t *testing.T) {
+	tc := setupVaultTest(t)
+	ctx := context.Background()
+	token := createVaultSessionToken(t, tc, []string{"vault:read", "vault:write", "vault:delete"})
+
+	// Write an entry
+	_, err := tc.vaultSvc.Write(ctx, token, &VaultWriteRequest{
+		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "DESTROY_ME",
+		Value: []byte("to-destroy"), CreatedBy: "member-001",
+	})
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	// Destroy it
+	destroyedCount, err := tc.vaultSvc.Destroy(ctx, token, &VaultDestroyRequest{
+		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "DESTROY_ME",
+	})
+	if err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	if destroyedCount == 0 {
+		t.Error("expected at least one destroyed entry")
+	}
+
+	// Read should fail — entry is destroyed
+	_, err = tc.vaultSvc.Read(ctx, token, &VaultReadRequest{
+		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "DESTROY_ME",
+	})
+	if err == nil {
+		t.Fatal("expected error reading destroyed entry")
+	}
+}
+
+func TestVaultDestroy_MasterRole(t *testing.T) {
+	tc := setupVaultTest(t)
+	ctx := context.Background()
+
+	// Create session with master-like scopes (vault:delete is needed)
+	token := createVaultSessionToken(t, tc, []string{"vault:read", "vault:write", "vault:delete"})
+
+	// Write
+	_, err := tc.vaultSvc.Write(ctx, token, &VaultWriteRequest{
+		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "MASTER_DESTROY",
+		Value: []byte("data"), CreatedBy: "member-001",
+	})
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	// Master should be able to destroy
+	destroyedCount, err := tc.vaultSvc.Destroy(ctx, token, &VaultDestroyRequest{
+		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "MASTER_DESTROY",
+	})
+	if err != nil {
+		t.Fatalf("Destroy by master: %v", err)
+	}
+	if destroyedCount == 0 {
+		t.Error("master destroy should succeed")
+	}
+}
+
+func TestVaultDelete_ThenRead(t *testing.T) {
+	tc := setupVaultTest(t)
+	ctx := context.Background()
+	token := createVaultSessionToken(t, tc, []string{"vault:read", "vault:write", "vault:delete"})
+
+	// Write
+	_, _ = tc.vaultSvc.Write(ctx, token, &VaultWriteRequest{
+		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "DEL_READ",
+		Value: []byte("val"), CreatedBy: "member-001",
+	})
+
+	// Soft delete
+	err := tc.vaultSvc.Delete(ctx, token, &VaultDeleteRequest{
+		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "DEL_READ",
+	})
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	// Read should fail
+	_, err = tc.vaultSvc.Read(ctx, token, &VaultReadRequest{
+		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "DEL_READ",
+	})
+	if err == nil {
+		t.Fatal("expected error reading soft-deleted entry")
+	}
+}
+
+func TestVaultDelete_ThenDestroy(t *testing.T) {
+	tc := setupVaultTest(t)
+	ctx := context.Background()
+	token := createVaultSessionToken(t, tc, []string{"vault:read", "vault:write", "vault:delete"})
+
+	// Write
+	_, _ = tc.vaultSvc.Write(ctx, token, &VaultWriteRequest{
+		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "DEL_THEN_DESTROY",
+		Value: []byte("val"), CreatedBy: "member-001",
+	})
+
+	// Soft delete first
+	_ = tc.vaultSvc.Delete(ctx, token, &VaultDeleteRequest{
+		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "DEL_THEN_DESTROY",
+	})
+
+	// Then destroy — should succeed
+	_, err := tc.vaultSvc.Destroy(ctx, token, &VaultDestroyRequest{
+		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "DEL_THEN_DESTROY",
+	})
+	if err != nil {
+		t.Fatalf("Destroy after soft delete: %v", err)
+	}
+}
+
+func TestVaultWrite_ConcurrentSameKey(t *testing.T) {
+	tc := setupVaultTest(t)
+	ctx := context.Background()
+	token := createVaultSessionToken(t, tc, []string{"vault:read", "vault:write"})
+
+	const goroutines = 2
+	errs := make(chan error, goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		go func(idx int) {
+			_, err := tc.vaultSvc.Write(ctx, token, &VaultWriteRequest{
+				OrgID: "org-001", ScopeID: "s1", EntryType: "env",
+				Key:       "CONCURRENT_KEY",
+				Value:     []byte(fmt.Sprintf("value-%d", idx)),
+				CreatedBy: "member-001",
+			})
+			errs <- err
+		}(i)
+	}
+
+	for i := 0; i < goroutines; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent write %d: %v", i, err)
+		}
+	}
+
+	// Both should have succeeded — history should have entries
+	resp, err := tc.vaultSvc.History(ctx, token, &VaultHistoryRequest{
+		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "CONCURRENT_KEY",
+	})
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(resp.Versions) < 2 {
+		t.Errorf("expected ≥2 versions after concurrent writes, got %d", len(resp.Versions))
+	}
+}
+
+func TestVaultRead_AfterKeyRotation(t *testing.T) {
+	tc := setupVaultTest(t)
+	ctx := context.Background()
+	token := createVaultSessionToken(t, tc, []string{"vault:read", "vault:write"})
+
+	// Write a value
+	_, err := tc.vaultSvc.Write(ctx, token, &VaultWriteRequest{
+		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "ROTATE_READ",
+		Value: []byte("pre-rotation-data"), CreatedBy: "member-001",
+	})
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	// Read it back (should work before and after any internal rotation)
+	resp, err := tc.vaultSvc.Read(ctx, token, &VaultReadRequest{
+		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "ROTATE_READ",
+		ClientSideDecrypt: true,
+	})
+	if err != nil {
+		t.Fatalf("Read after write: %v", err)
+	}
+	if resp.Key != "ROTATE_READ" {
+		t.Errorf("Key = %q, want %q", resp.Key, "ROTATE_READ")
+	}
+	if len(resp.EncryptedValue) == 0 {
+		t.Error("EncryptedValue is empty")
+	}
+}
+
 // --- Vault List tests ---
 
 func TestVaultList(t *testing.T) {

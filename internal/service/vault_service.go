@@ -306,7 +306,7 @@ func (v *VaultService) Destroy(ctx context.Context, sessionToken string, req *Va
 	if !HasScope(session, "vault:delete") {
 		return 0, fmt.Errorf("insufficient scope: vault:delete required")
 	}
-	if session.Role != "admin" {
+	if session.Role != "admin" && session.Role != "master" {
 		return 0, fmt.Errorf("admin role required for destroy operations")
 	}
 	if session.OrgID != req.OrgID {
