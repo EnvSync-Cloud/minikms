@@ -519,6 +519,104 @@ func TestIssueMemberCert_WithStore(t *testing.T) {
 	}
 }
 
+func TestIssueMemberCert_StoresPrivateKey(t *testing.T) {
+	svc, _, _, certStore := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	_, orgCACert, orgCAKey, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: "org-privkey", OrgName: "PrivKey Test Org",
+	})
+
+	resp, err := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
+		MemberID: "m1", MemberEmail: "m@test.com", OrgID: "org-privkey",
+		Role: "admin", OrgCACert: orgCACert, OrgCAKey: orgCAKey,
+	})
+	if err != nil {
+		t.Fatalf("IssueMemberCert: %v", err)
+	}
+
+	// Verify that the stored cert record has EncryptedPrivateKey populated
+	rec, _ := certStore.GetCertificateBySerial(ctx, resp.SerialHex)
+	if rec == nil {
+		t.Fatal("member cert should be stored")
+	}
+	if len(rec.EncryptedPrivateKey) == 0 {
+		t.Error("EncryptedPrivateKey should be populated for managed member certs")
+	}
+}
+
+func TestIssueMemberCert_PrivateKeyRoundtrip(t *testing.T) {
+	svc, _, _, _ := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	_, orgCACert, orgCAKey, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: "org-roundtrip", OrgName: "Roundtrip Test Org",
+	})
+
+	resp, err := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
+		MemberID: "m1", MemberEmail: "roundtrip@test.com", OrgID: "org-roundtrip",
+		Role: "member", OrgCACert: orgCACert, OrgCAKey: orgCAKey,
+	})
+	if err != nil {
+		t.Fatalf("IssueMemberCert: %v", err)
+	}
+
+	// Parse the returned cert and key PEMs
+	certBlock, _ := pem.Decode([]byte(resp.CertPEM))
+	if certBlock == nil {
+		t.Fatal("failed to decode cert PEM")
+	}
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+
+	keyBlock, _ := pem.Decode([]byte(resp.KeyPEM))
+	if keyBlock == nil {
+		t.Fatal("failed to decode key PEM")
+	}
+	privKey, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	if err != nil {
+		t.Fatalf("ParseECPrivateKey: %v", err)
+	}
+
+	// Verify the private key matches the cert's public key
+	pubKey := cert.PublicKey.(*ecdsa.PublicKey)
+	if !pubKey.Equal(&privKey.PublicKey) {
+		t.Error("private key does not match certificate public key")
+	}
+}
+
+func TestCreateOrgWithWrapping_WrapManagerCalled(t *testing.T) {
+	svc, _, _, _ := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	wrapStore := testutil.NewMockOrgCAWrapStore()
+	mgr := keys.NewOrgCAWrapManager(wrapStore)
+	svc.SetOrgCAWrapManager(mgr)
+
+	resp, err := svc.CreateOrgWithWrapping(ctx, &CreateOrgWithWrappingRequest{
+		OrgID: "org-wrap-check", OrgName: "Wrap Check Org",
+		CreatorMemberID: "creator-001", CreatorEmail: "creator@test.com",
+		CreatorRole: "admin",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrgWithWrapping: %v", err)
+	}
+	if resp.MemberSerial == "" {
+		t.Error("MemberSerial should be set")
+	}
+
+	// Verify the wrap was stored for the creator member
+	wrap, err := wrapStore.GetOrgCAWrap(ctx, "org-wrap-check", "creator-001")
+	if err != nil {
+		t.Fatalf("GetOrgCAWrap: %v", err)
+	}
+	if wrap == nil {
+		t.Error("org CA wrap should exist for creator member")
+	}
+}
+
 func TestCreateOrgCAFull_Stored(t *testing.T) {
 	svc, _, _, certStore := setupPKIWithStore(t)
 	ctx := context.Background()

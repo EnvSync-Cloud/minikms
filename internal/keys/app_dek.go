@@ -3,6 +3,7 @@ package keys
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/envsync/minikms/internal/crypto"
 )
@@ -67,7 +68,20 @@ func (m *AppDEKManager) GetOrCreateDEK(ctx context.Context, orgID, appID string)
 		return dek, record.ID, nil
 	}
 
-	return m.createNewDEK(ctx, orgID, appID, 1)
+	dek, keyID, err := m.createNewDEK(ctx, orgID, appID, 1)
+	if err != nil && strings.Contains(err.Error(), "idx_key_versions_active") {
+		// Concurrent request already created the DEK — retry the get
+		record, err = m.store.GetActiveKeyVersion(ctx, orgID, appID)
+		if err != nil || record == nil {
+			return nil, "", fmt.Errorf("DEK conflict: failed to get after concurrent create: %w", err)
+		}
+		dek, err = m.decryptDEK(orgID, record.EncryptedKey)
+		if err != nil {
+			return nil, "", err
+		}
+		return dek, record.ID, nil
+	}
+	return dek, keyID, err
 }
 
 // RotateDEK creates a new key version for an app, retiring the current one.

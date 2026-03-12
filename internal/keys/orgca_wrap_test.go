@@ -285,6 +285,93 @@ func TestGetWrapData_Revoked(t *testing.T) {
 	}
 }
 
+func TestWrapOrgCA_ConcurrentMembers(t *testing.T) {
+	store := newTestOrgCAWrapStore()
+	mgr := NewOrgCAWrapManager(store)
+	ctx := context.Background()
+
+	orgCAKey := generateTestKey(t, elliptic.P384())
+
+	const numMembers = 5
+	errs := make(chan error, numMembers)
+
+	for i := range numMembers {
+		go func(idx int) {
+			memberKey := generateTestKey(t, elliptic.P384())
+			memberID := fmt.Sprintf("member-%03d", idx)
+			certSerial := fmt.Sprintf("serial-%03d", idx)
+			err := mgr.WrapOrgCAForMember(ctx, "org-concurrent", memberID, certSerial, &memberKey.PublicKey, orgCAKey)
+			errs <- err
+		}(i)
+	}
+
+	for range numMembers {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent WrapOrgCAForMember: %v", err)
+		}
+	}
+
+	// Verify all wraps are stored
+	wraps, err := store.GetOrgCAWraps(ctx, "org-concurrent")
+	if err != nil {
+		t.Fatalf("GetOrgCAWraps: %v", err)
+	}
+	if len(wraps) != numMembers {
+		t.Errorf("expected %d wraps, got %d", numMembers, len(wraps))
+	}
+}
+
+func TestRewrapOrgCA_PreviousRevoked(t *testing.T) {
+	store := newTestOrgCAWrapStore()
+	mgr := NewOrgCAWrapManager(store)
+	ctx := context.Background()
+
+	orgID := "org-rewrap"
+	orgCAKey := generateTestKey(t, elliptic.P384())
+	member1Key := generateTestKey(t, elliptic.P384())
+	member2Key := generateTestKey(t, elliptic.P384())
+
+	// Wrap for member 1
+	err := mgr.WrapOrgCAForMember(ctx, orgID, "member-1", "serial-1", &member1Key.PublicKey, orgCAKey)
+	if err != nil {
+		t.Fatalf("WrapOrgCAForMember: %v", err)
+	}
+
+	// Wrap for member 2 (first time)
+	err = mgr.WrapOrgCAForMember(ctx, orgID, "member-2", "serial-2a", &member2Key.PublicKey, orgCAKey)
+	if err != nil {
+		t.Fatalf("WrapOrgCAForMember (member-2 first): %v", err)
+	}
+
+	// Revoke member 2's wrap
+	err = store.RevokeOrgCAWrap(ctx, orgID, "member-2")
+	if err != nil {
+		t.Fatalf("RevokeOrgCAWrap: %v", err)
+	}
+
+	// Verify member 2's wrap is revoked
+	wrap, _ := store.GetOrgCAWrap(ctx, orgID, "member-2")
+	if wrap == nil || wrap.RevokedAt == nil {
+		t.Fatal("member-2 wrap should be revoked")
+	}
+
+	// Rewrap for member 2 with new key (overwrites the revoked wrap)
+	newMember2Key := generateTestKey(t, elliptic.P384())
+	err = mgr.WrapOrgCAForMember(ctx, orgID, "member-2", "serial-2b", &newMember2Key.PublicKey, orgCAKey)
+	if err != nil {
+		t.Fatalf("WrapOrgCAForMember (member-2 rewrap): %v", err)
+	}
+
+	// New member 2 should be able to unwrap
+	recovered, err := mgr.UnwrapOrgCA(ctx, orgID, "member-2", newMember2Key)
+	if err != nil {
+		t.Fatalf("UnwrapOrgCA (member-2 rewrap): %v", err)
+	}
+	if recovered.D.Cmp(orgCAKey.D) != 0 {
+		t.Error("rewrapped key does not match original")
+	}
+}
+
 func TestParseMemberCertPublicKey(t *testing.T) {
 	// Generate a self-signed cert for testing
 	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)

@@ -30,6 +30,8 @@ type TokenEntry struct {
 	IssuedAt    time.Time
 	ExpiresAt   time.Time
 	Revoked     bool
+	CertSerial  string   // certificate serial that created this session
+	Scopes      []string // granted scopes
 }
 
 // JWTValidator validates JWTs by jti + hash lookup (Issue #5, #12).

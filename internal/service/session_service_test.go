@@ -594,6 +594,133 @@ func TestGenerateSessionSigningKey(t *testing.T) {
 	}
 }
 
+func TestCreateSessionManaged_CustomScopes(t *testing.T) {
+	svc, _, certStore, _ := setupTestSessionService(t)
+	ctx := context.Background()
+
+	_, _, certPEM, serialHex := createTestMemberCert(t)
+	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
+		SerialNumber: serialHex,
+		CertType:     "member",
+		OrgID:        "org-001",
+		CertPEM:      string(certPEM),
+		Status:       "active",
+		IssuedAt:     time.Now().Add(-time.Hour),
+		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour),
+	})
+
+	// Request specific scopes that override role defaults
+	resp, err := svc.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
+		MemberID:   "member-001",
+		OrgID:      "org-001",
+		CertSerial: serialHex,
+		Scopes:     []string{"vault:read"},
+	})
+	if err != nil {
+		t.Fatalf("CreateSessionManaged: %v", err)
+	}
+	if len(resp.Scopes) != 1 {
+		t.Errorf("expected 1 scope, got %d: %v", len(resp.Scopes), resp.Scopes)
+	}
+	if resp.Scopes[0] != "vault:read" {
+		t.Errorf("scope = %q, want %q", resp.Scopes[0], "vault:read")
+	}
+}
+
+func TestValidateSession_Expired(t *testing.T) {
+	// Create a session service with very short TTL
+	signingKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	registry := newMockTokenRegistry()
+	certStore := newMockCertStore()
+	policyStore := newMockPolicyStore()
+	auditLogger := audit.NewAuditLogger(&mockAuditStore{})
+
+	// Very short TTL: 1 millisecond
+	svc := NewSessionService(signingKey, "test-issuer", 1*time.Millisecond, registry, certStore, policyStore, auditLogger)
+	ctx := context.Background()
+
+	// Set policy with SessionDurationSec=0 so it falls back to the 1ms defaultTTL
+	policyStore.mu.Lock()
+	policyStore.policies["org-001"] = &store.OrgSecurityPolicy{
+		OrgID:              "org-001",
+		SessionDurationSec: 0,
+		MaxSessionTokens:   10,
+	}
+	policyStore.mu.Unlock()
+
+	_, _, certPEM, serialHex := createTestMemberCert(t)
+	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
+		SerialNumber: serialHex,
+		CertType:     "member",
+		OrgID:        "org-001",
+		CertPEM:      string(certPEM),
+		Status:       "active",
+		IssuedAt:     time.Now().Add(-time.Hour),
+		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour),
+	})
+
+	sessionResp, err := svc.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
+		MemberID:   "member-001",
+		OrgID:      "org-001",
+		CertSerial: serialHex,
+	})
+	if err != nil {
+		t.Fatalf("CreateSessionManaged: %v", err)
+	}
+
+	// Wait for expiration
+	time.Sleep(50 * time.Millisecond)
+
+	resp, err := svc.ValidateSession(ctx, &ValidateSessionRequest{SessionToken: sessionResp.SessionToken})
+	if err != nil {
+		t.Fatalf("ValidateSession: %v", err)
+	}
+	if resp.Valid {
+		t.Error("session should be invalid after expiration")
+	}
+}
+
+func TestResolveScopes_MasterRole(t *testing.T) {
+	svc, _, _, _ := setupTestSessionService(t)
+
+	scopes := svc.resolveScopes(nil, "master")
+	// Master should get full scopes (same as admin: vault:read, vault:write, vault:delete, pki:issue)
+	if len(scopes) < 4 {
+		t.Errorf("master default scopes: got %d, want ≥4", len(scopes))
+	}
+
+	// Verify critical scopes are present
+	scopeMap := make(map[string]bool)
+	for _, s := range scopes {
+		scopeMap[s] = true
+	}
+	if !scopeMap["vault:read"] {
+		t.Error("master should have vault:read")
+	}
+	if !scopeMap["vault:write"] {
+		t.Error("master should have vault:write")
+	}
+}
+
+func TestResolveScopes_UnknownRole(t *testing.T) {
+	svc, _, _, _ := setupTestSessionService(t)
+
+	scopes := svc.resolveScopes(nil, "completely-unknown-role")
+	if len(scopes) != 1 || scopes[0] != "vault:read" {
+		t.Errorf("unknown role scopes: got %v, want [vault:read]", scopes)
+	}
+}
+
+func TestResolveScopes_ExplicitOverride(t *testing.T) {
+	svc, _, _, _ := setupTestSessionService(t)
+
+	// Admin requesting only vault:read — should get just vault:read
+	scopes := svc.resolveScopes([]string{"vault:read"}, "admin")
+	if len(scopes) != 1 || scopes[0] != "vault:read" {
+		t.Errorf("explicit override: got %v, want [vault:read]", scopes)
+	}
+}
+
 func TestValidateSessionFromToken(t *testing.T) {
 	svc, _, certStore, _ := setupTestSessionService(t)
 	ctx := context.Background()

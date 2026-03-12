@@ -134,6 +134,149 @@ func TestAppDEKManager_IncrementAndCheckRotation(t *testing.T) {
 	})
 }
 
+func TestGetOrCreateDEK_Concurrent(t *testing.T) {
+	ctx := context.Background()
+	mgr, _ := setupDEKTest(t)
+
+	const goroutines = 10
+	results := make(chan struct {
+		dek  []byte
+		kvID string
+		err  error
+	}, goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			dek, kvID, err := mgr.GetOrCreateDEK(ctx, "org-concurrent", "app-concurrent")
+			results <- struct {
+				dek  []byte
+				kvID string
+				err  error
+			}{dek, kvID, err}
+		}()
+	}
+
+	var firstDEK []byte
+	var firstKVID string
+	for i := 0; i < goroutines; i++ {
+		r := <-results
+		if r.err != nil {
+			t.Fatalf("goroutine %d: GetOrCreateDEK: %v", i, r.err)
+		}
+		if firstDEK == nil {
+			firstDEK = r.dek
+			firstKVID = r.kvID
+		} else {
+			if !bytes.Equal(firstDEK, r.dek) {
+				t.Error("concurrent calls returned different DEKs")
+			}
+			if firstKVID != r.kvID {
+				t.Error("concurrent calls returned different key version IDs")
+			}
+		}
+	}
+}
+
+func TestGetOrCreateDEK_DifferentApps(t *testing.T) {
+	ctx := context.Background()
+	mgr, _ := setupDEKTest(t)
+
+	dek1, kvID1, err := mgr.GetOrCreateDEK(ctx, "org1", "app-alpha")
+	if err != nil {
+		t.Fatalf("GetOrCreateDEK app-alpha: %v", err)
+	}
+	dek2, kvID2, err := mgr.GetOrCreateDEK(ctx, "org1", "app-beta")
+	if err != nil {
+		t.Fatalf("GetOrCreateDEK app-beta: %v", err)
+	}
+
+	if bytes.Equal(dek1, dek2) {
+		t.Error("different apps should get different DEKs")
+	}
+	if kvID1 == kvID2 {
+		t.Error("different apps should get different key version IDs")
+	}
+}
+
+func TestRotateDEK_DuringActiveEncryption(t *testing.T) {
+	ctx := context.Background()
+	mgr, _ := setupDEKTest(t)
+
+	// Get the initial DEK
+	dek1, _, err := mgr.GetOrCreateDEK(ctx, "org1", "app-rotate")
+	if err != nil {
+		t.Fatalf("GetOrCreateDEK: %v", err)
+	}
+
+	// Encrypt with old DEK
+	plaintext := []byte("data before rotation")
+	aad := []byte("org1:app-rotate")
+	ct, err := crypto.Encrypt(dek1, plaintext, aad)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	// Rotate
+	_, err = mgr.RotateDEK(ctx, "org1", "app-rotate")
+	if err != nil {
+		t.Fatalf("RotateDEK: %v", err)
+	}
+
+	// Old DEK should still decrypt old ciphertext
+	pt, err := crypto.Decrypt(dek1, ct, aad)
+	if err != nil {
+		t.Fatalf("Decrypt with old DEK after rotation: %v", err)
+	}
+	if !bytes.Equal(pt, plaintext) {
+		t.Error("plaintext mismatch after decryption with old DEK")
+	}
+
+	// New DEK should be different
+	dek2, _, err := mgr.GetOrCreateDEK(ctx, "org1", "app-rotate")
+	if err != nil {
+		t.Fatalf("GetOrCreateDEK after rotation: %v", err)
+	}
+	if bytes.Equal(dek1, dek2) {
+		t.Error("rotated DEK should be different from original")
+	}
+}
+
+func TestIncrementAndCheckRotation_ExactThreshold(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("exactly at 90%", func(t *testing.T) {
+		mgr, store := setupDEKTest(t)
+		_, kvID, _ := mgr.GetOrCreateDEK(ctx, "org1", "app-thresh90")
+
+		// maxEncryptions=100, 90% = 90, set count to 89 so next increment = 90
+		store.SetCount(kvID, 89)
+
+		status, err := mgr.IncrementAndCheckRotation(ctx, kvID)
+		if err != nil {
+			t.Fatalf("IncrementAndCheckRotation: %v", err)
+		}
+		if status != crypto.KeyStatusRotatePending {
+			t.Errorf("at 90%%: got %q, want %q", status, crypto.KeyStatusRotatePending)
+		}
+	})
+
+	t.Run("exactly at 100%", func(t *testing.T) {
+		mgr, store := setupDEKTest(t)
+		_, kvID, _ := mgr.GetOrCreateDEK(ctx, "org1", "app-thresh100")
+
+		// maxEncryptions=100, set count to 99 so next increment = 100
+		store.SetCount(kvID, 99)
+
+		status, err := mgr.IncrementAndCheckRotation(ctx, kvID)
+		if err != nil {
+			t.Fatalf("IncrementAndCheckRotation: %v", err)
+		}
+		if status != crypto.KeyStatusRetired {
+			t.Errorf("at 100%%: got %q, want %q", status, crypto.KeyStatusRetired)
+		}
+	})
+}
+
 func TestAppDEKManager_EncryptDecryptRoundtrip(t *testing.T) {
 	ctx := context.Background()
 	mgr, _ := setupDEKTest(t)

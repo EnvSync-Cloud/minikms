@@ -52,6 +52,10 @@ func (m *MockDEKStore) CreateKeyVersion(_ context.Context, record *keys.KeyVersi
 		record.ID = fmt.Sprintf("kv-%d", len(m.byID)+1)
 	}
 	key := record.OrgID + ":" + record.AppID
+	// Enforce unique active constraint (simulates idx_key_versions_active)
+	if existing, ok := m.records[key]; ok && existing.Status == string(crypto.KeyStatusActive) && record.Status == string(crypto.KeyStatusActive) {
+		return fmt.Errorf("duplicate key value violates unique constraint \"idx_key_versions_active\"")
+	}
 	// Store a copy
 	cp := *record
 	cpKey := make([]byte, len(record.EncryptedKey))

@@ -140,9 +140,9 @@ func (s *PostgresStore) UpdateKeyStatus(ctx context.Context, keyVersionID string
 
 func (s *PostgresStore) StoreToken(ctx context.Context, entry *auth.TokenEntry) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO token_registry (jti, subject_hash, jwt_hash, issued_at, expires_at, revoked)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		entry.JTI, entry.SubjectHash, entry.JWTHash, entry.IssuedAt, entry.ExpiresAt, entry.Revoked)
+		`INSERT INTO token_registry (jti, subject_hash, jwt_hash, issued_at, expires_at, revoked, cert_serial, scopes)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		entry.JTI, entry.SubjectHash, entry.JWTHash, entry.IssuedAt, entry.ExpiresAt, entry.Revoked, entry.CertSerial, entry.Scopes)
 	return err
 }
 

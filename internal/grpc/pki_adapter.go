@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	pb "github.com/envsync/minikms/api/proto/minikms/v1"
+	"github.com/envsync/minikms/internal/keys"
 	"github.com/envsync/minikms/internal/service"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -75,6 +76,12 @@ func (a *PKIAdapter) IssueMemberCert(ctx context.Context, req *pb.IssueMemberCer
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
+	}
+
+	// Create Org CA wrap for the new member so they can decrypt vault entries
+	memberPub, err := keys.ParseMemberCertPublicKey(resp.CertPEM)
+	if err == nil {
+		_ = a.pkiSvc.WrapOrgCAForMember(ctx, req.OrgId, req.MemberId, resp.SerialHex, memberPub, entry.key)
 	}
 
 	return &pb.IssueMemberCertResponse{

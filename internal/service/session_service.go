@@ -390,6 +390,8 @@ func (s *SessionService) issueSessionToken(ctx context.Context, memberID, orgID,
 		IssuedAt:    now,
 		ExpiresAt:   expiresAt,
 		Revoked:     false,
+		CertSerial:  certSerial,
+		Scopes:      scopes,
 	}
 	if err := s.registry.StoreToken(ctx, entry); err != nil {
 		return nil, fmt.Errorf("failed to store session token: %w", err)
@@ -409,9 +411,12 @@ func (s *SessionService) issueSessionToken(ctx context.Context, memberID, orgID,
 func (s *SessionService) resolveScopes(requested []string, role string) []string {
 	// Default scopes based on role
 	defaultScopes := map[string][]string{
-		"admin":    {"vault:read", "vault:write", "vault:delete", "pki:issue"},
-		"member":   {"vault:read", "vault:write"},
-		"readonly": {"vault:read"},
+		"master":     {"vault:read", "vault:write", "vault:delete", "pki:issue"},
+		"admin":      {"vault:read", "vault:write", "vault:delete", "pki:issue"},
+		"member":     {"vault:read", "vault:write"},
+		"developer":  {"vault:read", "vault:write"},
+		"readonly":   {"vault:read"},
+		"viewer":     {"vault:read"},
 	}
 
 	defaults, ok := defaultScopes[role]
