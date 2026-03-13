@@ -14,11 +14,11 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
-	"github.com/envsync/minikms/internal/audit"
-	"github.com/envsync/minikms/internal/auth"
-	"github.com/envsync/minikms/internal/pki"
-	"github.com/envsync/minikms/internal/pkistore"
-	"github.com/envsync/minikms/internal/store"
+	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/auth"
+	"github.com/envsync-cloud/minikms/internal/pki"
+	"github.com/envsync-cloud/minikms/internal/pkistore"
+	"github.com/envsync-cloud/minikms/internal/store"
 )
 
 // SessionPolicyStore defines the policy/token methods SessionService needs from the store.
@@ -239,12 +239,12 @@ func (s *SessionService) ValidateSession(ctx context.Context, req *ValidateSessi
 
 	return &ValidateSessionResponse{
 		Valid:      true,
-		MemberID:  claims.Subject,
-		OrgID:     claims.OrgID,
-		Role:      claims.Role,
+		MemberID:   claims.Subject,
+		OrgID:      claims.OrgID,
+		Role:       claims.Role,
 		CertSerial: claims.CertSerial,
-		Scopes:    claims.Scopes,
-		ExpiresAt: claims.ExpiresAt.Time,
+		Scopes:     claims.Scopes,
+		ExpiresAt:  claims.ExpiresAt.Time,
 	}, nil
 }
 
@@ -411,12 +411,12 @@ func (s *SessionService) issueSessionToken(ctx context.Context, memberID, orgID,
 func (s *SessionService) resolveScopes(requested []string, role string) []string {
 	// Default scopes based on role
 	defaultScopes := map[string][]string{
-		"master":     {"vault:read", "vault:write", "vault:delete", "pki:issue"},
-		"admin":      {"vault:read", "vault:write", "vault:delete", "pki:issue"},
-		"member":     {"vault:read", "vault:write"},
-		"developer":  {"vault:read", "vault:write"},
-		"readonly":   {"vault:read"},
-		"viewer":     {"vault:read"},
+		"master":    {"vault:read", "vault:write", "vault:delete", "pki:issue"},
+		"admin":     {"vault:read", "vault:write", "vault:delete", "pki:issue"},
+		"member":    {"vault:read", "vault:write"},
+		"developer": {"vault:read", "vault:write"},
+		"readonly":  {"vault:read"},
+		"viewer":    {"vault:read"},
 	}
 
 	defaults, ok := defaultScopes[role]
@@ -481,4 +481,3 @@ func GenerateSessionSigningKey() (*ecdsa.PrivateKey, error) {
 	}
 	return key, nil
 }
-

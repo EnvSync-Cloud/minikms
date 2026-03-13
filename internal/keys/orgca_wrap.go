@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/envsync/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/crypto"
 )
 
 // OrgCAWrapRecord represents a per-member wrapped Org CA private key.

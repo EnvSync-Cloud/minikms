@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/envsync/minikms/internal/crypto"
-	"github.com/envsync/minikms/internal/keys"
+	"github.com/envsync-cloud/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/keys"
 )
 
 func main() {

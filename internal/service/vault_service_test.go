@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/envsync/minikms/internal/keys"
-	"github.com/envsync/minikms/internal/pki"
-	"github.com/envsync/minikms/internal/pkistore"
-	"github.com/envsync/minikms/internal/store"
-	"github.com/envsync/minikms/internal/testutil"
+	"github.com/envsync-cloud/minikms/internal/keys"
+	"github.com/envsync-cloud/minikms/internal/pki"
+	"github.com/envsync-cloud/minikms/internal/pkistore"
+	"github.com/envsync-cloud/minikms/internal/store"
+	"github.com/envsync-cloud/minikms/internal/testutil"
 )
 
 // --- Mock VaultStore ---

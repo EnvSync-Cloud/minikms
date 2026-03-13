@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package minikms.v1;
 
-option go_package = "github.com/envsync/minikms/api/proto/minikms/v1;minikmsv1";
+option go_package = "github.com/envsync-cloud/minikms/api/proto/minikms/v1;minikmsv1";
 
 // PKIService manages the 3-level PKI hierarchy:
 // Root CA -> Org Intermediate CA (IsCA:true, MaxPathLen:0) -> Member Certificate (IsCA:false)

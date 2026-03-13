@@ -3,8 +3,8 @@ package grpc
 import (
 	"context"
 
-	pb "github.com/envsync/minikms/api/proto/minikms/v1"
-	"github.com/envsync/minikms/internal/service"
+	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
+	"github.com/envsync-cloud/minikms/internal/service"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -65,11 +65,11 @@ func (a *SessionAdapter) ValidateSession(ctx context.Context, req *pb.ValidateSe
 
 	pbResp := &pb.ValidateSessionResponse{
 		Valid:      resp.Valid,
-		MemberId:  resp.MemberID,
-		OrgId:     resp.OrgID,
-		Role:      resp.Role,
+		MemberId:   resp.MemberID,
+		OrgId:      resp.OrgID,
+		Role:       resp.Role,
 		CertSerial: resp.CertSerial,
-		Scopes:    resp.Scopes,
+		Scopes:     resp.Scopes,
 	}
 	if resp.Valid {
 		pbResp.ExpiresAt = timestamppb.New(resp.ExpiresAt)

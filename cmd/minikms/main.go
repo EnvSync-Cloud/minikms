@@ -16,15 +16,15 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	pb "github.com/envsync/minikms/api/proto/minikms/v1"
-	"github.com/envsync/minikms/internal/audit"
-	"github.com/envsync/minikms/internal/config"
-	grpcadapter "github.com/envsync/minikms/internal/grpc"
-	"github.com/envsync/minikms/internal/keys"
-	"github.com/envsync/minikms/internal/pki"
-	"github.com/envsync/minikms/internal/ratelimit"
-	"github.com/envsync/minikms/internal/service"
-	"github.com/envsync/minikms/internal/store"
+	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
+	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/config"
+	grpcadapter "github.com/envsync-cloud/minikms/internal/grpc"
+	"github.com/envsync-cloud/minikms/internal/keys"
+	"github.com/envsync-cloud/minikms/internal/pki"
+	"github.com/envsync-cloud/minikms/internal/ratelimit"
+	"github.com/envsync-cloud/minikms/internal/service"
+	"github.com/envsync-cloud/minikms/internal/store"
 )
 
 func main() {

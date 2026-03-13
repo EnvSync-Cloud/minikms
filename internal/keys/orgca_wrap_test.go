@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/envsync/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/crypto"
 )
 
 // testOrgCAWrapStore is a minimal in-memory OrgCAWrapStore for unit tests.

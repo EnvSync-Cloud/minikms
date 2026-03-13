@@ -9,10 +9,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/envsync/minikms/internal/audit"
-	"github.com/envsync/minikms/internal/auth"
-	"github.com/envsync/minikms/internal/keys"
-	"github.com/envsync/minikms/internal/pkistore"
+	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/auth"
+	"github.com/envsync-cloud/minikms/internal/keys"
+	"github.com/envsync-cloud/minikms/internal/pkistore"
 )
 
 // --- VaultEntry types ---

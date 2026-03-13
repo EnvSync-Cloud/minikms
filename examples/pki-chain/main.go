@@ -10,7 +10,7 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/envsync/minikms/internal/pki"
+	"github.com/envsync-cloud/minikms/internal/pki"
 )
 
 func main() {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/envsync/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/crypto"
 )
 
 // DEKStore defines the interface for persisting encrypted DEKs.

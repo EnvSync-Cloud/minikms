@@ -9,22 +9,22 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/envsync/minikms/internal/audit"
-	"github.com/envsync/minikms/internal/crypto"
-	"github.com/envsync/minikms/internal/keys"
-	"github.com/envsync/minikms/internal/pki"
-	"github.com/envsync/minikms/internal/pkistore"
+	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/keys"
+	"github.com/envsync-cloud/minikms/internal/pki"
+	"github.com/envsync-cloud/minikms/internal/pkistore"
 )
 
 // PKIService handles certificate lifecycle gRPC operations.
 type PKIService struct {
-	rootCert      *x509.Certificate
-	rootKey       *ecdsa.PrivateKey
-	auditLogger   *audit.AuditLogger
-	store         pkistore.Store
-	orgCAWrapMgr  *keys.OrgCAWrapManager
-	shamirShares  int
-	shamirThresh  int
+	rootCert     *x509.Certificate
+	rootKey      *ecdsa.PrivateKey
+	auditLogger  *audit.AuditLogger
+	store        pkistore.Store
+	orgCAWrapMgr *keys.OrgCAWrapManager
+	shamirShares int
+	shamirThresh int
 }
 
 // NewPKIService creates a new PKIService.
@@ -66,8 +66,8 @@ type CreateOrgCARequest struct {
 
 // CreateOrgCAResponse represents the result of creating an org CA.
 type CreateOrgCAResponse struct {
-	CertPEM    string
-	SerialHex  string
+	CertPEM   string
+	SerialHex string
 }
 
 // CreateOrgCAFull creates an org intermediate CA certificate and returns the
@@ -128,7 +128,7 @@ type CreateOrgWithWrappingRequest struct {
 	CreatorMemberID string
 	CreatorEmail    string
 	CreatorRole     string
-	CreatorCSR      []byte  // If non-nil, BYOK mode: use CSR instead of generating key
+	CreatorCSR      []byte // If non-nil, BYOK mode: use CSR instead of generating key
 }
 
 // CreateOrgWithWrappingResponse holds the org creation result with member cert and Org CA wrap.
@@ -251,13 +251,13 @@ func (s *PKIService) CreateOrgWithWrapping(ctx context.Context, req *CreateOrgWi
 
 // AddMemberRequest represents a request to add a member to an org with Org CA key wrapping.
 type AddMemberRequest struct {
-	OrgID             string
-	MemberID          string
-	MemberEmail       string
-	Role              string
-	AdminMemberID     string          // Admin performing the add
-	AdminPrivKey      *ecdsa.PrivateKey // Admin's private key (for unwrapping Org CA)
-	MemberCSR         []byte           // If non-nil, BYOK mode
+	OrgID         string
+	MemberID      string
+	MemberEmail   string
+	Role          string
+	AdminMemberID string            // Admin performing the add
+	AdminPrivKey  *ecdsa.PrivateKey // Admin's private key (for unwrapping Org CA)
+	MemberCSR     []byte            // If non-nil, BYOK mode
 }
 
 // AddMemberResponse holds the result of adding a member.
@@ -384,9 +384,9 @@ type IssueMemberCertRequest struct {
 
 // IssueMemberCertResponse represents the result of issuing a member certificate.
 type IssueMemberCertResponse struct {
-	CertPEM    string
-	KeyPEM     string
-	SerialHex  string
+	CertPEM   string
+	KeyPEM    string
+	SerialHex string
 }
 
 // IssueMemberCert creates a member end-entity certificate.

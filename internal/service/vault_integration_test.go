@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/envsync/minikms/internal/audit"
-	"github.com/envsync/minikms/internal/keys"
-	"github.com/envsync/minikms/internal/pki"
-	"github.com/envsync/minikms/internal/testutil"
+	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/keys"
+	"github.com/envsync-cloud/minikms/internal/pki"
+	"github.com/envsync-cloud/minikms/internal/testutil"
 )
 
 // integrationStack holds the full in-memory service stack for integration tests.

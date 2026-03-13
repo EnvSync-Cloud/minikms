@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/envsync/minikms/internal/keys"
-	"github.com/envsync/minikms/internal/testutil"
+	"github.com/envsync-cloud/minikms/internal/keys"
+	"github.com/envsync-cloud/minikms/internal/testutil"
 )
 
 func setupKeyService(t *testing.T) *KeyService {

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/envsync/minikms/internal/audit"
-	"github.com/envsync/minikms/internal/auth"
-	"github.com/envsync/minikms/internal/keys"
+	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/auth"
+	"github.com/envsync-cloud/minikms/internal/keys"
 )
 
 func setupPostgresStore(t *testing.T) *PostgresStore {

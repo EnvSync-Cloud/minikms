@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/envsync/minikms/internal/audit"
-	"github.com/envsync/minikms/internal/crypto"
-	"github.com/envsync/minikms/internal/keys"
-	"github.com/envsync/minikms/internal/pkistore"
-	"github.com/envsync/minikms/internal/store"
+	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/keys"
+	"github.com/envsync-cloud/minikms/internal/pkistore"
+	"github.com/envsync-cloud/minikms/internal/store"
 )
 
 // VaultStore abstracts the database operations needed by VaultService.
@@ -37,9 +37,10 @@ type VaultStore interface {
 
 // VaultService provides zero-trust secret storage, replacing HashiCorp Vault KV v2.
 // It implements the 3-layer encryption pipeline:
-//   Layer 1: RSA/Hybrid (BYOK) — happens in envsync-api (value arrives pre-encrypted)
-//   Layer 2: ECIES with Org CA — happens here on write/read
-//   Layer 3: KMS envelope encryption — happens here on write/read
+//
+//	Layer 1: RSA/Hybrid (BYOK) — happens in envsync-api (value arrives pre-encrypted)
+//	Layer 2: ECIES with Org CA — happens here on write/read
+//	Layer 3: KMS envelope encryption — happens here on write/read
 type VaultService struct {
 	dekManager     *keys.AppDEKManager
 	orgCAWrapMgr   *keys.OrgCAWrapManager
@@ -67,13 +68,13 @@ func NewVaultService(
 
 // VaultWriteRequest represents a request to write a vault entry.
 type VaultWriteRequest struct {
-	OrgID      string
-	ScopeID    string
-	EntryType  string
-	Key        string
-	EnvTypeID  *string
-	Value      []byte // Layer 1 output (RSA/Hybrid encrypted blob from envsync-api)
-	CreatedBy  string // member_id
+	OrgID     string
+	ScopeID   string
+	EntryType string
+	Key       string
+	EnvTypeID *string
+	Value     []byte // Layer 1 output (RSA/Hybrid encrypted blob from envsync-api)
+	CreatedBy string // member_id
 }
 
 // VaultWriteResponse represents the result of a vault write.
@@ -161,11 +162,11 @@ func (v *VaultService) Write(ctx context.Context, sessionToken string, req *Vaul
 
 // VaultReadRequest represents a request to read a vault entry.
 type VaultReadRequest struct {
-	OrgID            string
-	ScopeID          string
-	EntryType        string
-	Key              string
-	EnvTypeID        *string
+	OrgID             string
+	ScopeID           string
+	EntryType         string
+	Key               string
+	EnvTypeID         *string
 	ClientSideDecrypt bool // true for BYOK, false for managed
 }
 

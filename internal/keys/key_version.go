@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/envsync/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/crypto"
 )
 
 // KeyVersionManager provides key version lifecycle operations.

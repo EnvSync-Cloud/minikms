@@ -7,12 +7,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/envsync/minikms/internal/audit"
-	"github.com/envsync/minikms/internal/auth"
-	"github.com/envsync/minikms/internal/crypto"
-	"github.com/envsync/minikms/internal/keys"
-	"github.com/envsync/minikms/internal/pkistore"
-	"github.com/envsync/minikms/internal/store"
+	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/auth"
+	"github.com/envsync-cloud/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/keys"
+	"github.com/envsync-cloud/minikms/internal/pkistore"
+	"github.com/envsync-cloud/minikms/internal/store"
 )
 
 // MockDEKStore is an in-memory implementation of keys.DEKStore for testing.

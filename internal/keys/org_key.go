@@ -3,7 +3,7 @@ package keys
 import (
 	"fmt"
 
-	"github.com/envsync/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/crypto"
 )
 
 // OrgKeyManager handles org master key derivation via HKDF.

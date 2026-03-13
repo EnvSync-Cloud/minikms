@@ -6,7 +6,7 @@ import (
 	"encoding/base64"
 	"testing"
 
-	"github.com/envsync/minikms/internal/testutil"
+	"github.com/envsync-cloud/minikms/internal/testutil"
 )
 
 func setupKMSService(t *testing.T) *KMSService {

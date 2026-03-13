@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/envsync/minikms/internal/audit"
-	"github.com/envsync/minikms/internal/keys"
+	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/keys"
 )
 
 // KeyService handles key lifecycle operations.

@@ -7,9 +7,9 @@ import (
 	"encoding/pem"
 	"sync"
 
-	pb "github.com/envsync/minikms/api/proto/minikms/v1"
-	"github.com/envsync/minikms/internal/keys"
-	"github.com/envsync/minikms/internal/service"
+	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
+	"github.com/envsync-cloud/minikms/internal/keys"
+	"github.com/envsync-cloud/minikms/internal/service"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -26,8 +26,8 @@ type PKIAdapter struct {
 	pb.UnimplementedPKIServiceServer
 	pkiSvc *service.PKIService
 
-	mu      sync.RWMutex
-	orgCAs  map[string]*orgCAEntry
+	mu     sync.RWMutex
+	orgCAs map[string]*orgCAEntry
 }
 
 // NewPKIAdapter creates a new PKIAdapter.

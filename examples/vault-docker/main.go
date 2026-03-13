@@ -9,7 +9,7 @@ import (
 
 	vaultapi "github.com/hashicorp/vault/api"
 
-	pb "github.com/envsync/minikms/api/proto/minikms/v1"
+	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )

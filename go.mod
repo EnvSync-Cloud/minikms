@@ -1,4 +1,4 @@
-module github.com/envsync/minikms
+module github.com/envsync-cloud/minikms
 
 go 1.23.0
 

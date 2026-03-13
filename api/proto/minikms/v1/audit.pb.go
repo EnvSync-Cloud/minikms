@@ -7,11 +7,12 @@
 package minikmsv1
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -351,7 +352,7 @@ const file_api_proto_minikms_v1_audit_proto_rawDesc = "" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid2\xb1\x01\n" +
 	"\fAuditService\x12Q\n" +
 	"\fGetAuditLogs\x12\x1f.minikms.v1.GetAuditLogsRequest\x1a .minikms.v1.GetAuditLogsResponse\x12N\n" +
-	"\vVerifyChain\x12\x1e.minikms.v1.VerifyChainRequest\x1a\x1f.minikms.v1.VerifyChainResponseB;Z9github.com/envsync/minikms/api/proto/minikms/v1;minikmsv1b\x06proto3"
+	"\vVerifyChain\x12\x1e.minikms.v1.VerifyChainRequest\x1a\x1f.minikms.v1.VerifyChainResponseB;Z9github.com/envsync-cloud/minikms/api/proto/minikms/v1;minikmsv1b\x06proto3"
 
 var (
 	file_api_proto_minikms_v1_audit_proto_rawDescOnce sync.Once

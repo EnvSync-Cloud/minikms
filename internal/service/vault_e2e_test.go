@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/envsync/minikms/internal/audit"
-	"github.com/envsync/minikms/internal/keys"
-	"github.com/envsync/minikms/internal/pki"
-	"github.com/envsync/minikms/internal/store"
+	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/keys"
+	"github.com/envsync-cloud/minikms/internal/pki"
+	"github.com/envsync-cloud/minikms/internal/store"
 )
 
 // vaultStack holds the full service stack for E2E tests.

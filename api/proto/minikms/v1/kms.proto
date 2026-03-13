@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package minikms.v1;
 
-option go_package = "github.com/envsync/minikms/api/proto/minikms/v1;minikmsv1";
+option go_package = "github.com/envsync-cloud/minikms/api/proto/minikms/v1;minikmsv1";
 
 // KMSService provides encrypt/decrypt operations using managed data encryption keys.
 // Callers never see root key or plaintext DEKs — all operations go through this service.

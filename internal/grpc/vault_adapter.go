@@ -3,8 +3,8 @@ package grpc
 import (
 	"context"
 
-	pb "github.com/envsync/minikms/api/proto/minikms/v1"
-	"github.com/envsync/minikms/internal/service"
+	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
+	"github.com/envsync-cloud/minikms/internal/service"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -282,4 +282,3 @@ func vaultReadResponseToProto(resp *service.VaultReadResponse) *pb.VaultReadResp
 
 	return pbResp
 }
-

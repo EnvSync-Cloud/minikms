@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/envsync/minikms/internal/audit"
-	"github.com/envsync/minikms/internal/auth"
-	"github.com/envsync/minikms/internal/pki"
-	"github.com/envsync/minikms/internal/pkistore"
-	"github.com/envsync/minikms/internal/store"
+	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/auth"
+	"github.com/envsync-cloud/minikms/internal/pki"
+	"github.com/envsync-cloud/minikms/internal/pkistore"
+	"github.com/envsync-cloud/minikms/internal/store"
 )
 
 // --- Test mocks ---

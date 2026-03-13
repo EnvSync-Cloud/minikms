@@ -10,10 +10,10 @@ import (
 	"log"
 	"time"
 
-	"github.com/envsync/minikms/internal/keys"
-	"github.com/envsync/minikms/internal/pki"
-	"github.com/envsync/minikms/internal/service"
-	"github.com/envsync/minikms/internal/testutil"
+	"github.com/envsync-cloud/minikms/internal/keys"
+	"github.com/envsync-cloud/minikms/internal/pki"
+	"github.com/envsync-cloud/minikms/internal/service"
+	"github.com/envsync-cloud/minikms/internal/testutil"
 )
 
 func main() {

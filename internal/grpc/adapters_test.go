@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/envsync/minikms/api/proto/minikms/v1"
-	"github.com/envsync/minikms/internal/service"
-	"github.com/envsync/minikms/internal/testutil"
+	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
+	"github.com/envsync-cloud/minikms/internal/service"
+	"github.com/envsync-cloud/minikms/internal/testutil"
 	"google.golang.org/grpc/metadata"
 )
 

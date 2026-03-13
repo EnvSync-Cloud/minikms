@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/envsync/minikms/internal/audit"
-	"github.com/envsync/minikms/internal/testutil"
+	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/testutil"
 )
 
 func setupAuditService(t *testing.T) (*AuditService, *audit.AuditLogger) {

@@ -5,9 +5,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/envsync/minikms/internal/crypto"
-	"github.com/envsync/minikms/internal/keys"
-	"github.com/envsync/minikms/internal/testutil"
+	"github.com/envsync-cloud/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/keys"
+	"github.com/envsync-cloud/minikms/internal/testutil"
 )
 
 const testRootKeyHexDEK = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"

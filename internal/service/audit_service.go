@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/envsync/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/audit"
 )
 
 // AuditService handles audit log gRPC operations.

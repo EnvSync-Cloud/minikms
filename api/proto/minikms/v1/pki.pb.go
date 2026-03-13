@@ -7,11 +7,12 @@
 package minikmsv1
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -711,7 +712,7 @@ const file_api_proto_minikms_v1_pki_proto_rawDesc = "" +
 	"RevokeCert\x12\x1d.minikms.v1.RevokeCertRequest\x1a\x1e.minikms.v1.RevokeCertResponse\x12?\n" +
 	"\x06GetCRL\x12\x19.minikms.v1.GetCRLRequest\x1a\x1a.minikms.v1.GetCRLResponse\x12H\n" +
 	"\tCheckOCSP\x12\x1c.minikms.v1.CheckOCSPRequest\x1a\x1d.minikms.v1.CheckOCSPResponse\x12H\n" +
-	"\tGetRootCA\x12\x1c.minikms.v1.GetRootCARequest\x1a\x1d.minikms.v1.GetRootCAResponseB;Z9github.com/envsync/minikms/api/proto/minikms/v1;minikmsv1b\x06proto3"
+	"\tGetRootCA\x12\x1c.minikms.v1.GetRootCARequest\x1a\x1d.minikms.v1.GetRootCAResponseB;Z9github.com/envsync-cloud/minikms/api/proto/minikms/v1;minikmsv1b\x06proto3"
 
 var (
 	file_api_proto_minikms_v1_pki_proto_rawDescOnce sync.Once
