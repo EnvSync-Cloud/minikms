@@ -11,7 +11,7 @@ require (
 	github.com/redis/go-redis/v9 v9.7.0
 	golang.org/x/crypto v0.40.0
 	google.golang.org/grpc v1.70.0
-	google.golang.org/protobuf v1.36.4
+	google.golang.org/protobuf v1.36.11
 )
 
 require (

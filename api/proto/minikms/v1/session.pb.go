@@ -7,13 +7,12 @@
 package minikmsv1
 
 import (
-	reflect "reflect"
-	sync "sync"
-	unsafe "unsafe"
-
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
+	reflect "reflect"
+	sync "sync"
+	unsafe "unsafe"
 )
 
 const (
@@ -863,7 +862,7 @@ const file_api_proto_minikms_v1_session_proto_rawDesc = "" +
 	"\x0fValidateSession\x12\".minikms.v1.ValidateSessionRequest\x1a#.minikms.v1.ValidateSessionResponse\x12T\n" +
 	"\rRevokeSession\x12 .minikms.v1.RevokeSessionRequest\x1a!.minikms.v1.RevokeSessionResponse\x12i\n" +
 	"\x14RevokeMemberSessions\x12'.minikms.v1.RevokeMemberSessionsRequest\x1a(.minikms.v1.RevokeMemberSessionsResponse\x12Q\n" +
-	"\fListSessions\x12\x1f.minikms.v1.ListSessionsRequest\x1a .minikms.v1.ListSessionsResponseB;Z9github.com/envsync-cloud/minikms/api/proto/minikms/v1;minikmsv1b\x06proto3"
+	"\fListSessions\x12\x1f.minikms.v1.ListSessionsRequest\x1a .minikms.v1.ListSessionsResponseBAZ?github.com/envsync-cloud/minikms/api/proto/minikms/v1;minikmsv1b\x06proto3"
 
 var (
 	file_api_proto_minikms_v1_session_proto_rawDescOnce sync.Once

@@ -7,12 +7,11 @@
 package minikmsv1
 
 import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
-
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -1139,7 +1138,7 @@ const file_api_proto_minikms_v1_kms_proto_rawDesc = "" +
 	"\rRotateDataKey\x12 .minikms.v1.RotateDataKeyRequest\x1a!.minikms.v1.RotateDataKeyResponse\x12H\n" +
 	"\tReEncrypt\x12\x1c.minikms.v1.ReEncryptRequest\x1a\x1d.minikms.v1.ReEncryptResponse\x12K\n" +
 	"\n" +
-	"GetKeyInfo\x12\x1d.minikms.v1.GetKeyInfoRequest\x1a\x1e.minikms.v1.GetKeyInfoResponseB;Z9github.com/envsync-cloud/minikms/api/proto/minikms/v1;minikmsv1b\x06proto3"
+	"GetKeyInfo\x12\x1d.minikms.v1.GetKeyInfoRequest\x1a\x1e.minikms.v1.GetKeyInfoResponseBAZ?github.com/envsync-cloud/minikms/api/proto/minikms/v1;minikmsv1b\x06proto3"
 
 var (
 	file_api_proto_minikms_v1_kms_proto_rawDescOnce sync.Once

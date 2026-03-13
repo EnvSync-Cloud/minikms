@@ -7,13 +7,12 @@
 package minikmsv1
 
 import (
-	reflect "reflect"
-	sync "sync"
-	unsafe "unsafe"
-
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
+	reflect "reflect"
+	sync "sync"
+	unsafe "unsafe"
 )
 
 const (
@@ -1260,7 +1259,7 @@ const file_api_proto_minikms_v1_vault_proto_rawDesc = "" +
 	"\x06Delete\x12\x1e.minikms.v1.VaultDeleteRequest\x1a\x1f.minikms.v1.VaultDeleteResponse\x12L\n" +
 	"\aDestroy\x12\x1f.minikms.v1.VaultDestroyRequest\x1a .minikms.v1.VaultDestroyResponse\x12C\n" +
 	"\x04List\x12\x1c.minikms.v1.VaultListRequest\x1a\x1d.minikms.v1.VaultListResponse\x12L\n" +
-	"\aHistory\x12\x1f.minikms.v1.VaultHistoryRequest\x1a .minikms.v1.VaultHistoryResponseB;Z9github.com/envsync-cloud/minikms/api/proto/minikms/v1;minikmsv1b\x06proto3"
+	"\aHistory\x12\x1f.minikms.v1.VaultHistoryRequest\x1a .minikms.v1.VaultHistoryResponseBAZ?github.com/envsync-cloud/minikms/api/proto/minikms/v1;minikmsv1b\x06proto3"
 
 var (
 	file_api_proto_minikms_v1_vault_proto_rawDescOnce sync.Once
