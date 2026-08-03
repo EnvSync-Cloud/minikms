@@ -3,6 +3,7 @@ package keys_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/envsync-cloud/minikms/internal/crypto"
@@ -22,6 +23,46 @@ func setupDEKTest(t *testing.T) (*keys.AppDEKManager, *testutil.MockDEKStore) {
 	store := testutil.NewMockDEKStore()
 	mgr := keys.NewAppDEKManager(orgKeyMgr, store, 100) // low max for testing
 	return mgr, store
+}
+
+func TestAppDEKManager_GetDEKByVersion(t *testing.T) {
+	ctx := context.Background()
+	mgr, _ := setupDEKTest(t)
+
+	oldDEK, oldID, err := mgr.GetOrCreateDEK(ctx, "org1", "app1")
+	if err != nil {
+		t.Fatalf("GetOrCreateDEK: %v", err)
+	}
+	if _, err := mgr.RotateDEK(ctx, "org1", "app1"); err != nil {
+		t.Fatalf("RotateDEK: %v", err)
+	}
+
+	got, err := mgr.GetDEKByVersion(ctx, "org1", "app1", oldID)
+	if err != nil {
+		t.Fatalf("GetDEKByVersion retired key: %v", err)
+	}
+	if !bytes.Equal(got, oldDEK) {
+		t.Fatal("retrieved retired DEK does not match original")
+	}
+
+	for _, tc := range []struct {
+		name  string
+		orgID string
+		appID string
+		keyID string
+		want  error
+	}{
+		{name: "missing ID", orgID: "org1", appID: "app1", want: keys.ErrKeyVersionRequired},
+		{name: "unknown ID", orgID: "org1", appID: "app1", keyID: "missing", want: keys.ErrKeyVersionNotFound},
+		{name: "wrong org", orgID: "org2", appID: "app1", keyID: oldID, want: keys.ErrKeyVersionNotFound},
+		{name: "wrong app", orgID: "org1", appID: "app2", keyID: oldID, want: keys.ErrKeyVersionNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := mgr.GetDEKByVersion(ctx, tc.orgID, tc.appID, tc.keyID); !errors.Is(err, tc.want) {
+				t.Fatalf("GetDEKByVersion error = %v, want %v", err, tc.want)
+			}
+		})
+	}
 }
 
 func TestAppDEKManager_GetOrCreateDEK(t *testing.T) {

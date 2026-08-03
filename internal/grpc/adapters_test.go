@@ -160,10 +160,11 @@ func TestKMSAdapter_EncryptDecrypt(t *testing.T) {
 
 	// Decrypt
 	decResp, err := adapter.Decrypt(ctx, &pb.DecryptRequest{
-		TenantId:   "org-1",
-		ScopeId:    "app-1",
-		Ciphertext: encResp.Ciphertext,
-		Aad:        "test-aad",
+		TenantId:     "org-1",
+		ScopeId:      "app-1",
+		Ciphertext:   encResp.Ciphertext,
+		Aad:          "test-aad",
+		KeyVersionId: encResp.KeyVersionId,
 	})
 	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
@@ -198,8 +199,8 @@ func TestKMSAdapter_BatchEncryptDecrypt(t *testing.T) {
 		TenantId: "org-1",
 		ScopeId:  "app-1",
 		Items: []*pb.BatchDecryptItem{
-			{Ciphertext: batchEncResp.Items[0].Ciphertext, Aad: "aad1"},
-			{Ciphertext: batchEncResp.Items[1].Ciphertext, Aad: "aad2"},
+			{Ciphertext: batchEncResp.Items[0].Ciphertext, Aad: "aad1", KeyVersionId: batchEncResp.Items[0].KeyVersionId},
+			{Ciphertext: batchEncResp.Items[1].Ciphertext, Aad: "aad2", KeyVersionId: batchEncResp.Items[1].KeyVersionId},
 		},
 	})
 	if err != nil {

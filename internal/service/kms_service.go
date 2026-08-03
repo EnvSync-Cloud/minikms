@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/envsync-cloud/minikms/internal/audit"
 	"github.com/envsync-cloud/minikms/internal/crypto"
@@ -94,9 +96,9 @@ func (s *KMSService) Decrypt(ctx context.Context, req *DecryptRequest) (*Decrypt
 		return nil, fmt.Errorf("invalid base64 ciphertext: %w", err)
 	}
 
-	dek, _, err := s.dekManager.GetOrCreateDEK(ctx, req.TenantID, req.ScopeID)
+	dek, err := s.dekManager.GetDEKByVersion(ctx, req.TenantID, req.ScopeID, req.KeyVersionID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get DEK: %w", err)
+		return nil, fmt.Errorf("failed to get DEK by version: %w", err)
 	}
 	defer zeroize(dek)
 
@@ -104,6 +106,9 @@ func (s *KMSService) Decrypt(ctx context.Context, req *DecryptRequest) (*Decrypt
 	if err != nil {
 		return nil, fmt.Errorf("decryption failed: %w", err)
 	}
+
+	_ = s.auditLogger.Log(ctx, req.TenantID, "decrypt", "system",
+		fmt.Sprintf("Decrypted data for scope %s with key version %s", req.ScopeID, req.KeyVersionID), "")
 
 	return &DecryptResponse{Plaintext: plaintext}, nil
 }
@@ -163,14 +168,25 @@ type BatchDecryptResponse struct {
 
 // BatchDecrypt decrypts multiple items in a single call.
 func (s *KMSService) BatchDecrypt(ctx context.Context, req *BatchDecryptRequest) (*BatchDecryptResponse, error) {
-	dek, _, err := s.dekManager.GetOrCreateDEK(ctx, req.TenantID, req.ScopeID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get DEK: %w", err)
-	}
-	defer zeroize(dek)
+	deks := make(map[string][]byte)
+	defer func() {
+		for _, dek := range deks {
+			zeroize(dek)
+		}
+	}()
 
 	results := make([]DecryptResponse, len(req.Items))
 	for i, item := range req.Items {
+		dek, ok := deks[item.KeyVersionID]
+		if !ok {
+			var err error
+			dek, err = s.dekManager.GetDEKByVersion(ctx, req.TenantID, req.ScopeID, item.KeyVersionID)
+			if err != nil {
+				return nil, fmt.Errorf("batch decrypt item %d: failed to get DEK by version: %w", i, err)
+			}
+			deks[item.KeyVersionID] = dek
+		}
+
 		ciphertext, err := base64.StdEncoding.DecodeString(item.Ciphertext)
 		if err != nil {
 			return nil, fmt.Errorf("batch decrypt item %d: invalid base64: %w", i, err)
@@ -181,6 +197,15 @@ func (s *KMSService) BatchDecrypt(ctx context.Context, req *BatchDecryptRequest)
 		}
 		results[i] = DecryptResponse{Plaintext: plaintext}
 	}
+
+	keyVersionIDs := make([]string, 0, len(deks))
+	for keyVersionID := range deks {
+		keyVersionIDs = append(keyVersionIDs, keyVersionID)
+	}
+	sort.Strings(keyVersionIDs)
+	_ = s.auditLogger.Log(ctx, req.TenantID, "batch_decrypt", "system",
+		fmt.Sprintf("Decrypted %d items for scope %s with key versions %s",
+			len(req.Items), req.ScopeID, strings.Join(keyVersionIDs, ",")), "")
 
 	return &BatchDecryptResponse{Items: results}, nil
 }

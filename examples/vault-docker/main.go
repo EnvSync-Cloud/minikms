@@ -142,12 +142,14 @@ func main() {
 
 		ciphertext := entry["ciphertext"].(string)
 		aad := entry["aad"].(string)
+		keyVersionID := entry["key_version_id"].(string)
 
 		decResp, err := kms.Decrypt(ctx, &pb.DecryptRequest{
-			TenantId:   tenantID,
-			ScopeId:    scopeID,
-			Ciphertext: ciphertext,
-			Aad:        aad,
+			TenantId:     tenantID,
+			ScopeId:      scopeID,
+			Ciphertext:   ciphertext,
+			Aad:          aad,
+			KeyVersionId: keyVersionID,
 		})
 		if err != nil {
 			log.Fatalf("Decrypt %s: %v", s.name, err)
@@ -209,10 +211,11 @@ func main() {
 	rotEntry := rotatedData["ROTATION_SECRET"].(map[string]interface{})
 
 	decRotated, err := kms.Decrypt(ctx, &pb.DecryptRequest{
-		TenantId:   tenantID,
-		ScopeId:    scopeID,
-		Ciphertext: rotEntry["ciphertext"].(string),
-		Aad:        rotEntry["aad"].(string),
+		TenantId:     tenantID,
+		ScopeId:      scopeID,
+		Ciphertext:   rotEntry["ciphertext"].(string),
+		Aad:          rotEntry["aad"].(string),
+		KeyVersionId: rotEntry["key_version_id"].(string),
 	})
 	if err != nil {
 		log.Fatalf("Decrypt rotated: %v", err)

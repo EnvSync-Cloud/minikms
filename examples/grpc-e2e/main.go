@@ -88,10 +88,11 @@ func main() {
 	for _, s := range secrets {
 		enc := encryptedMap[s.name]
 		decResp, err := kms.Decrypt(ctx, &pb.DecryptRequest{
-			TenantId:   tenantID,
-			ScopeId:    scopeID,
-			Ciphertext: enc.ciphertext,
-			Aad:        enc.aad,
+			TenantId:     tenantID,
+			ScopeId:      scopeID,
+			Ciphertext:   enc.ciphertext,
+			Aad:          enc.aad,
+			KeyVersionId: enc.keyVersionID,
 		})
 		if err != nil {
 			log.Fatalf("Decrypt %s: %v", s.name, err)
@@ -129,10 +130,11 @@ func main() {
 	fmt.Printf("  Encrypted with rotated key: %s\n", encNew.KeyVersionId)
 
 	decRotated, err := kms.Decrypt(ctx, &pb.DecryptRequest{
-		TenantId:   tenantID,
-		ScopeId:    scopeID,
-		Ciphertext: encNew.Ciphertext,
-		Aad:        newAAD,
+		TenantId:     tenantID,
+		ScopeId:      scopeID,
+		Ciphertext:   encNew.Ciphertext,
+		Aad:          newAAD,
+		KeyVersionId: encNew.KeyVersionId,
 	})
 	if err != nil {
 		log.Fatalf("Decrypt rotated: %v", err)

@@ -293,7 +293,24 @@ func TestVaultIntegration_KeyRotationContinuity(t *testing.T) {
 		t.Errorf("plaintext mismatch: got %q", string(decResp.Plaintext))
 	}
 
-	// Step 5: Verify audit log contains data_key_rotated action
+	// Step 5: Decrypt every pre-rotation ciphertext with its retired key version.
+	for _, secret := range origSecrets {
+		resp, err := stack.kmsSvc.Decrypt(ctx, &DecryptRequest{
+			TenantID:     tenantID,
+			ScopeID:      scopeID,
+			Ciphertext:   secret.ciphertext,
+			AAD:          secret.aad,
+			KeyVersionID: secret.keyVersion,
+		})
+		if err != nil {
+			t.Fatalf("Decrypt retired version for %s: %v", secret.name, err)
+		}
+		if got := string(resp.Plaintext); got != secret.plaintext {
+			t.Errorf("retired-version plaintext for %s = %q, want %q", secret.name, got, secret.plaintext)
+		}
+	}
+
+	// Step 6: Verify audit log contains data_key_rotated action
 	auditResp, err := stack.auditSvc.GetAuditLogs(ctx, &GetAuditLogsRequest{
 		OrgID:  tenantID,
 		Limit:  50,

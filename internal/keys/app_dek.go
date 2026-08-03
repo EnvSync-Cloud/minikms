@@ -2,6 +2,7 @@ package keys
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,9 @@ import (
 type DEKStore interface {
 	// GetActiveKeyVersion returns the currently active key version for an app.
 	GetActiveKeyVersion(ctx context.Context, orgID, appID string) (*KeyVersionRecord, error)
+	// GetKeyVersion returns an existing key version only when it belongs to the
+	// specified org and app. Retired versions remain available for decryption.
+	GetKeyVersion(ctx context.Context, orgID, appID, keyVersionID string) (*KeyVersionRecord, error)
 	// CreateKeyVersion stores a new encrypted key version.
 	CreateKeyVersion(ctx context.Context, record *KeyVersionRecord) error
 	// IncrementEncryptionCount atomically increments the encryption count.
@@ -19,6 +23,15 @@ type DEKStore interface {
 	// UpdateKeyStatus updates the key version status.
 	UpdateKeyStatus(ctx context.Context, keyVersionID string, status string) error
 }
+
+var (
+	// ErrKeyVersionRequired indicates that version-aware decryption was requested
+	// without identifying the key version that encrypted the ciphertext.
+	ErrKeyVersionRequired = errors.New("key version ID is required")
+	// ErrKeyVersionNotFound deliberately covers missing and ownership-mismatched
+	// versions so callers cannot enumerate another tenant's key versions.
+	ErrKeyVersionNotFound = errors.New("key version not found for specified tenant and scope")
+)
 
 // KeyVersionRecord represents a stored key version.
 type KeyVersionRecord struct {
@@ -82,6 +95,30 @@ func (m *AppDEKManager) GetOrCreateDEK(ctx context.Context, orgID, appID string)
 		return dek, record.ID, nil
 	}
 	return dek, keyID, err
+}
+
+// GetDEKByVersion returns the existing DEK identified by keyVersionID after
+// verifying that it belongs to orgID and appID. This method never creates a
+// key and permits retired versions so historical ciphertext remains
+// decryptable after rotation.
+func (m *AppDEKManager) GetDEKByVersion(ctx context.Context, orgID, appID, keyVersionID string) ([]byte, error) {
+	if keyVersionID == "" {
+		return nil, ErrKeyVersionRequired
+	}
+
+	record, err := m.store.GetKeyVersion(ctx, orgID, appID, keyVersionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query key version: %w", err)
+	}
+	if record == nil || record.KeyType != "app_dek" {
+		return nil, ErrKeyVersionNotFound
+	}
+
+	dek, err := m.decryptDEK(orgID, record.EncryptedKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt key version: %w", err)
+	}
+	return dek, nil
 }
 
 // RotateDEK creates a new key version for an app, retiring the current one.

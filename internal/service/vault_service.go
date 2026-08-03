@@ -452,9 +452,9 @@ func (v *VaultService) getOrgCAPublicKey(ctx context.Context, orgID string) (*ec
 // decryptEntry performs KMS unwrap (Layer 3) and optionally ECIES unwrap (Layer 2).
 func (v *VaultService) decryptEntry(ctx context.Context, session *ValidateSessionResponse, entry *store.VaultEntry, clientSideDecrypt bool) (*VaultReadResponse, error) {
 	// Layer 3: KMS unwrap
-	dek, _, err := v.dekManager.GetOrCreateDEK(ctx, entry.OrgID, entry.ScopeID)
+	dek, err := v.dekManager.GetDEKByVersion(ctx, entry.OrgID, entry.ScopeID, entry.KeyVersionID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get DEK: %w", err)
+		return nil, fmt.Errorf("failed to get DEK by version: %w", err)
 	}
 	defer zeroize(dek)
 
@@ -509,7 +509,8 @@ func (v *VaultService) decryptEntry(ctx context.Context, session *ValidateSessio
 	}
 
 	_ = v.auditLogger.Log(ctx, entry.OrgID, "vault_read", session.MemberID,
-		fmt.Sprintf("Read %s/%s/%s v%d", entry.ScopeID, entry.EntryType, entry.Key, entry.Version), "")
+		fmt.Sprintf("Read %s/%s/%s v%d with key version %s",
+			entry.ScopeID, entry.EntryType, entry.Key, entry.Version, entry.KeyVersionID), "")
 
 	return resp, nil
 }
