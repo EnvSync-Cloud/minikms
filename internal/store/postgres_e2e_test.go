@@ -81,6 +81,34 @@ func TestPostgres_DEKStore_CRUD(t *testing.T) {
 	if retired != nil {
 		t.Error("retired key should not be returned as active")
 	}
+
+	// Retired versions remain available by exact ID for historical decrypts.
+	byVersion, err := store.GetKeyVersion(ctx, orgID, appID, got.ID)
+	if err != nil {
+		t.Fatalf("GetKeyVersion: %v", err)
+	}
+	if byVersion == nil || byVersion.Status != "retired" {
+		t.Fatalf("expected retired key version, got %#v", byVersion)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		orgID string
+		appID string
+	}{
+		{name: "wrong org", orgID: orgID + "-other", appID: appID},
+		{name: "wrong app", orgID: orgID, appID: appID + "-other"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			record, err := store.GetKeyVersion(ctx, tc.orgID, tc.appID, got.ID)
+			if err != nil {
+				t.Fatalf("GetKeyVersion: %v", err)
+			}
+			if record != nil {
+				t.Fatalf("ownership-mismatched version should not be returned: %#v", record)
+			}
+		})
+	}
 }
 
 func TestPostgres_AuditStore(t *testing.T) {

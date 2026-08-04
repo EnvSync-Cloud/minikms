@@ -227,6 +227,7 @@ func (m *mockVaultStore) GetVaultEntryHistory(_ context.Context, orgID, scopeID,
 
 type vaultTestCtx struct {
 	vaultSvc     *VaultService
+	dekManager   *keys.AppDEKManager
 	sessionSvc   *SessionService
 	vaultStore   *mockVaultStore
 	certStore    *mockCertStore
@@ -329,6 +330,7 @@ func setupVaultTest(t *testing.T) *vaultTestCtx {
 
 	return &vaultTestCtx{
 		vaultSvc:     vaultSvc,
+		dekManager:   dekMgr,
 		sessionSvc:   sessionSvc,
 		vaultStore:   vaultStore,
 		certStore:    certStore,
@@ -786,8 +788,8 @@ func TestVaultRead_AfterKeyRotation(t *testing.T) {
 	ctx := context.Background()
 	token := createVaultSessionToken(t, tc, []string{"vault:read", "vault:write"})
 
-	// Write a value
-	_, err := tc.vaultSvc.Write(ctx, token, &VaultWriteRequest{
+	// Write a value under the initial DEK.
+	writeResp, err := tc.vaultSvc.Write(ctx, token, &VaultWriteRequest{
 		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "ROTATE_READ",
 		Value: []byte("pre-rotation-data"), CreatedBy: "member-001",
 	})
@@ -795,7 +797,16 @@ func TestVaultRead_AfterKeyRotation(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
-	// Read it back (should work before and after any internal rotation)
+	newKeyVersionID, err := tc.dekManager.RotateDEK(ctx, "org-001", "s1")
+	if err != nil {
+		t.Fatalf("RotateDEK: %v", err)
+	}
+	if newKeyVersionID == writeResp.KeyVersionID {
+		t.Fatal("rotation did not create a new key version")
+	}
+
+	// The latest entry is still encrypted under the retired version and must
+	// remain readable after rotation.
 	resp, err := tc.vaultSvc.Read(ctx, token, &VaultReadRequest{
 		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "ROTATE_READ",
 		ClientSideDecrypt: true,
@@ -808,6 +819,20 @@ func TestVaultRead_AfterKeyRotation(t *testing.T) {
 	}
 	if len(resp.EncryptedValue) == 0 {
 		t.Error("EncryptedValue is empty")
+	}
+	if resp.KeyVersionID != writeResp.KeyVersionID {
+		t.Errorf("KeyVersionID = %q, want retired version %q", resp.KeyVersionID, writeResp.KeyVersionID)
+	}
+
+	versionResp, err := tc.vaultSvc.ReadVersion(ctx, token, &VaultReadVersionRequest{
+		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "ROTATE_READ",
+		Version: 1, ClientSideDecrypt: true,
+	})
+	if err != nil {
+		t.Fatalf("ReadVersion after rotation: %v", err)
+	}
+	if versionResp.KeyVersionID != writeResp.KeyVersionID {
+		t.Errorf("ReadVersion KeyVersionID = %q, want %q", versionResp.KeyVersionID, writeResp.KeyVersionID)
 	}
 }
 

@@ -109,6 +109,29 @@ func (s *PostgresStore) GetActiveKeyVersion(ctx context.Context, orgID, appID st
 	return &r, nil
 }
 
+// GetKeyVersion returns a specific key version only when it belongs to the
+// requested org and app. Status is intentionally unrestricted because retired
+// versions must remain available for decrypting historical ciphertext.
+func (s *PostgresStore) GetKeyVersion(ctx context.Context, orgID, appID, keyVersionID string) (*keys.KeyVersionRecord, error) {
+	row := s.pool.QueryRow(ctx,
+		`SELECT id, org_id, app_id, key_type, version, encrypted_key, encryption_count, max_encryptions, status
+		 FROM key_versions
+		 WHERE id = $1 AND org_id = $2 AND app_id = $3 AND key_type = 'app_dek'
+		 LIMIT 1`,
+		keyVersionID, orgID, appID)
+
+	var r keys.KeyVersionRecord
+	err := row.Scan(&r.ID, &r.OrgID, &r.AppID, &r.KeyType, &r.Version,
+		&r.EncryptedKey, &r.EncryptionCount, &r.MaxEncryptions, &r.Status)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
 func (s *PostgresStore) CreateKeyVersion(ctx context.Context, record *keys.KeyVersionRecord) error {
 	record.ID = uuid.New().String()
 	_, err := s.pool.Exec(ctx,

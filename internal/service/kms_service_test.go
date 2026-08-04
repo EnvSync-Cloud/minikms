@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"strings"
 	"testing"
 
 	"github.com/envsync-cloud/minikms/internal/testutil"
@@ -16,6 +17,66 @@ func setupKMSService(t *testing.T) *KMSService {
 		t.Fatalf("SetupTestKMSStack: %v", err)
 	}
 	return NewKMSService(dekMgr, auditLogger)
+}
+
+func TestKMSService_DecryptAfterRotation(t *testing.T) {
+	ctx := context.Background()
+	_, _, dekMgr, _, auditLogger, auditStore, err := testutil.SetupTestKMSStack(testutil.TestRootKeyHex)
+	if err != nil {
+		t.Fatalf("SetupTestKMSStack: %v", err)
+	}
+	svc := NewKMSService(dekMgr, auditLogger)
+
+	encResp, err := svc.Encrypt(ctx, &EncryptRequest{
+		TenantID: "org-rotate", ScopeID: "app-rotate",
+		Plaintext: []byte("before rotation"), AAD: "rotation-aad",
+	})
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	newID, err := dekMgr.RotateDEK(ctx, "org-rotate", "app-rotate")
+	if err != nil {
+		t.Fatalf("RotateDEK: %v", err)
+	}
+	if newID == encResp.KeyVersionID {
+		t.Fatal("rotation did not create a new key version")
+	}
+
+	decResp, err := svc.Decrypt(ctx, &DecryptRequest{
+		TenantID: "org-rotate", ScopeID: "app-rotate",
+		Ciphertext: encResp.Ciphertext, AAD: "rotation-aad",
+		KeyVersionID: encResp.KeyVersionID,
+	})
+	if err != nil {
+		t.Fatalf("Decrypt old ciphertext after rotation: %v", err)
+	}
+	if !bytes.Equal(decResp.Plaintext, []byte("before rotation")) {
+		t.Fatalf("plaintext = %q, want %q", decResp.Plaintext, "before rotation")
+	}
+
+	if _, err := svc.Decrypt(ctx, &DecryptRequest{
+		TenantID: "org-rotate", ScopeID: "wrong-app",
+		Ciphertext: encResp.Ciphertext, AAD: "rotation-aad",
+		KeyVersionID: encResp.KeyVersionID,
+	}); err == nil {
+		t.Fatal("expected wrong-scope key lookup to fail")
+	}
+
+	entries, err := auditStore.GetEntries(ctx, "org-rotate", 10, 0)
+	if err != nil {
+		t.Fatalf("GetEntries: %v", err)
+	}
+	found := false
+	for _, entry := range entries {
+		if entry.Action == "decrypt" && strings.Contains(entry.Details, encResp.KeyVersionID) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("missing decrypt audit entry for key version %s", encResp.KeyVersionID)
+	}
 }
 
 func TestKMSService_EncryptDecrypt(t *testing.T) {
@@ -137,6 +198,45 @@ func TestKMSService_BatchEncryptDecrypt(t *testing.T) {
 		if !bytes.Equal(decItem.Plaintext, items[i].Plaintext) {
 			t.Errorf("item %d: got %q, want %q", i, string(decItem.Plaintext), string(items[i].Plaintext))
 		}
+	}
+}
+
+func TestKMSService_BatchDecryptMixedVersionsAfterRotation(t *testing.T) {
+	ctx := context.Background()
+	svc := setupKMSService(t)
+
+	oldResp, err := svc.Encrypt(ctx, &EncryptRequest{
+		TenantID: "org1", ScopeID: "mixed", Plaintext: []byte("old"), AAD: "old-aad",
+	})
+	if err != nil {
+		t.Fatalf("Encrypt old item: %v", err)
+	}
+	if _, err := svc.dekManager.RotateDEK(ctx, "org1", "mixed"); err != nil {
+		t.Fatalf("RotateDEK: %v", err)
+	}
+	newResp, err := svc.Encrypt(ctx, &EncryptRequest{
+		TenantID: "org1", ScopeID: "mixed", Plaintext: []byte("new"), AAD: "new-aad",
+	})
+	if err != nil {
+		t.Fatalf("Encrypt new item: %v", err)
+	}
+
+	resp, err := svc.BatchDecrypt(ctx, &BatchDecryptRequest{
+		TenantID: "org1",
+		ScopeID:  "mixed",
+		Items: []DecryptRequest{
+			{Ciphertext: oldResp.Ciphertext, AAD: "old-aad", KeyVersionID: oldResp.KeyVersionID},
+			{Ciphertext: newResp.Ciphertext, AAD: "new-aad", KeyVersionID: newResp.KeyVersionID},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BatchDecrypt mixed versions: %v", err)
+	}
+	if got := string(resp.Items[0].Plaintext); got != "old" {
+		t.Fatalf("old plaintext = %q, want old", got)
+	}
+	if got := string(resp.Items[1].Plaintext); got != "new" {
+		t.Fatalf("new plaintext = %q, want new", got)
 	}
 }
 

@@ -294,14 +294,7 @@ func TestVault_KeyRotationContinuity(t *testing.T) {
 			newResp.KeyVersionID, rotateResp.NewKeyVersionID)
 	}
 
-	// Step 6: Decrypt old secrets — still works (old ciphertexts were encrypted with old DEK,
-	// but since scope DEK is fetched as active, we need the new DEK to decrypt old data only
-	// if re-encrypted. In this system, the old ciphertext was encrypted with the old DEK.
-	// After rotation, GetOrCreateDEK returns the new DEK, so decrypting old ciphertext with
-	// new DEK will fail. This is expected — the test verifies that the system correctly
-	// handles key versioning.)
-	// NOTE: In a real vault, you'd re-encrypt old data or keep old key versions accessible.
-	// For this test, we verify the new key works for new data.
+	// Step 6: Verify the new key works for new data.
 	decResp, err := stack.kmsSvc.Decrypt(ctx, &DecryptRequest{
 		TenantID:     tenantID,
 		ScopeID:      scopeID,
@@ -316,7 +309,24 @@ func TestVault_KeyRotationContinuity(t *testing.T) {
 		t.Errorf("plaintext mismatch: got %q", string(decResp.Plaintext))
 	}
 
-	// Step 7: Verify audit trail contains data_key_rotated action
+	// Step 7: Verify retired key versions remain decrypt-capable.
+	for _, secret := range origSecrets {
+		resp, err := stack.kmsSvc.Decrypt(ctx, &DecryptRequest{
+			TenantID:     tenantID,
+			ScopeID:      scopeID,
+			Ciphertext:   secret.ciphertext,
+			AAD:          secret.aad,
+			KeyVersionID: secret.keyVersion,
+		})
+		if err != nil {
+			t.Fatalf("Decrypt retired version for %s: %v", secret.name, err)
+		}
+		if got := string(resp.Plaintext); got != secret.plaintext {
+			t.Errorf("retired-version plaintext for %s = %q, want %q", secret.name, got, secret.plaintext)
+		}
+	}
+
+	// Step 8: Verify audit trail contains data_key_rotated action
 	auditResp, err := stack.auditSvc.GetAuditLogs(ctx, &GetAuditLogsRequest{
 		OrgID:  tenantID,
 		Limit:  50,

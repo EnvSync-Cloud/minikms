@@ -45,6 +45,20 @@ func (m *MockDEKStore) GetActiveKeyVersion(_ context.Context, orgID, appID strin
 	return &cp, nil
 }
 
+func (m *MockDEKStore) GetKeyVersion(_ context.Context, orgID, appID, keyVersionID string) (*keys.KeyVersionRecord, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	rec, ok := m.byID[keyVersionID]
+	if !ok || rec.OrgID != orgID || rec.AppID != appID || rec.KeyType != "app_dek" {
+		return nil, nil
+	}
+	cp := *rec
+	cpKey := make([]byte, len(rec.EncryptedKey))
+	copy(cpKey, rec.EncryptedKey)
+	cp.EncryptedKey = cpKey
+	return &cp, nil
+}
+
 func (m *MockDEKStore) CreateKeyVersion(_ context.Context, record *keys.KeyVersionRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
