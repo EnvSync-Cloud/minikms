@@ -118,6 +118,8 @@ All configuration is via environment variables:
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `MINIKMS_ROOT_KEY` | Yes | — | 256-bit hex-encoded root encryption key |
+| `MINIKMS_SESSION_SIGNING_KEY` | Conditional | — | P-256 private key in PKCS#8 or SEC1 PEM format |
+| `MINIKMS_SESSION_SIGNING_KEY_FILE` | Conditional | — | Path to a mounted P-256 PEM private key; recommended for production |
 | `MINIKMS_DB_URL` | Yes | — | PostgreSQL connection string |
 | `MINIKMS_REDIS_URL` | Yes | — | Redis connection string (DEK caching) |
 | `MINIKMS_GRPC_ADDR` | No | `0.0.0.0:50051` | gRPC listen address |
@@ -125,6 +127,11 @@ All configuration is via environment variables:
 | `MINIKMS_TLS_ENABLED` | No | `false` | Enable TLS for gRPC |
 | `MINIKMS_TLS_CERT_FILE` | No | — | TLS certificate file path |
 | `MINIKMS_TLS_KEY_FILE` | No | — | TLS private key file path |
+
+Exactly one of `MINIKMS_SESSION_SIGNING_KEY` and
+`MINIKMS_SESSION_SIGNING_KEY_FILE` must be configured. All miniKMS replicas must
+use the same key so that sessions remain valid across restarts and can be
+verified by every replica.
 
 ## Deployment
 
@@ -149,6 +156,9 @@ This creates: `key_versions`, `token_registry`, `certificates`, `crl_entries`, `
 ```bash
 # Set required env vars
 export MINIKMS_ROOT_KEY="$(openssl rand -hex 32)"
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ./session-signing-key.pem
+chmod 600 ./session-signing-key.pem
+export MINIKMS_SESSION_SIGNING_KEY_FILE="./session-signing-key.pem"
 export MINIKMS_DB_URL="postgres://user:pass@localhost:5432/minikms?sslmode=disable"
 export MINIKMS_REDIS_URL="redis://localhost:6379/0"
 
@@ -156,6 +166,50 @@ export MINIKMS_REDIS_URL="redis://localhost:6379/0"
 make build
 make run
 ```
+
+### Production Session Signing Key
+
+The session signing key is a long-lived ES256 private key. miniKMS does not
+generate an ephemeral fallback: startup fails if the key is missing, invalid,
+not P-256, or configured through both supported sources.
+
+Generate the key once:
+
+```bash
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
+  -out session-signing-key.pem
+chmod 600 session-signing-key.pem
+```
+
+Store the PEM in a secret manager and mount it read-only into each miniKMS
+replica. For example, a container can use:
+
+```yaml
+services:
+  minikms:
+    environment:
+      MINIKMS_SESSION_SIGNING_KEY_FILE: /run/secrets/minikms-session-signing-key
+    secrets:
+      - minikms-session-signing-key
+
+secrets:
+  minikms-session-signing-key:
+    file: ./session-signing-key.pem
+```
+
+Kubernetes deployments should mount the same Secret into every pod and point
+`MINIKMS_SESSION_SIGNING_KEY_FILE` at the mounted file. Do not commit the key,
+include it in images, or print it in logs. Back up the secret securely: losing
+or replacing it invalidates all active sessions.
+
+Direct PEM injection through `MINIKMS_SESSION_SIGNING_KEY` is supported for
+secret-injection platforms that provide environment values, but a mounted file
+avoids exposing the private key through environment inspection.
+
+Signing-key rotation is not automatic. Replacing the configured key immediately
+invalidates existing sessions. A future zero-downtime rotation mechanism should
+add JWT `kid` headers and retain the previous verification key for at least the
+maximum session lifetime.
 
 ### Docker
 
@@ -184,6 +238,7 @@ minikms:
     MINIKMS_DB_URL: postgres://user:pass@postgres:5432/minikms?sslmode=disable
     MINIKMS_REDIS_URL: redis://redis:6379/1
     MINIKMS_ROOT_KEY: ${MINIKMS_ROOT_KEY}
+    MINIKMS_SESSION_SIGNING_KEY_FILE: /run/secrets/minikms-session-signing-key
     MINIKMS_GRPC_ADDR: 0.0.0.0:50051
   depends_on:
     - postgres

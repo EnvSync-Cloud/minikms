@@ -3,3 +3,4 @@ coverage.out
 /vault-docker
 *.out
 grpc-e2e
+/session-signing-key.pem

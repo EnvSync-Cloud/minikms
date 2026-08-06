@@ -10,6 +10,8 @@ func TestLoad_Defaults(t *testing.T) {
 	t.Setenv("MINIKMS_DB_URL", "postgres://localhost/test")
 	t.Setenv("MINIKMS_REDIS_URL", "redis://localhost:6379/0")
 	t.Setenv("MINIKMS_ROOT_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	t.Setenv("MINIKMS_SESSION_SIGNING_KEY", "test-key")
+	t.Setenv("MINIKMS_SESSION_SIGNING_KEY_FILE", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -52,6 +54,8 @@ func TestLoad_CustomValues(t *testing.T) {
 	t.Setenv("MINIKMS_DB_URL", "postgres://custom/db")
 	t.Setenv("MINIKMS_REDIS_URL", "redis://custom:6380/1")
 	t.Setenv("MINIKMS_ROOT_KEY", "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+	t.Setenv("MINIKMS_SESSION_SIGNING_KEY", "")
+	t.Setenv("MINIKMS_SESSION_SIGNING_KEY_FILE", "/run/secrets/session-key.pem")
 	t.Setenv("MINIKMS_GRPC_ADDR", "127.0.0.1:9090")
 	t.Setenv("MINIKMS_TLS_ENABLED", "true")
 	t.Setenv("MINIKMS_TLS_CERT", "/path/to/cert.pem")
@@ -89,12 +93,37 @@ func TestLoad_CustomValues(t *testing.T) {
 	if cfg.HKDFSalt != "custom-salt" {
 		t.Errorf("HKDFSalt = %q, want %q", cfg.HKDFSalt, "custom-salt")
 	}
+	if cfg.SessionSigningKeyFile != "/run/secrets/session-key.pem" {
+		t.Errorf("SessionSigningKeyFile = %q", cfg.SessionSigningKeyFile)
+	}
 	if cfg.ShamirTotalShares != 7 {
 		t.Errorf("ShamirTotalShares = %d, want 7", cfg.ShamirTotalShares)
 	}
 	if cfg.ShamirThreshold != 4 {
 		t.Errorf("ShamirThreshold = %d, want 4", cfg.ShamirThreshold)
 	}
+}
+
+func TestLoad_RequiresExactlyOneSessionSigningKeySource(t *testing.T) {
+	t.Setenv("MINIKMS_DB_URL", "postgres://localhost/test")
+	t.Setenv("MINIKMS_REDIS_URL", "redis://localhost:6379/0")
+	t.Setenv("MINIKMS_ROOT_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+	t.Run("missing", func(t *testing.T) {
+		t.Setenv("MINIKMS_SESSION_SIGNING_KEY", "")
+		t.Setenv("MINIKMS_SESSION_SIGNING_KEY_FILE", "")
+		if _, err := Load(); err == nil {
+			t.Fatal("Load should reject a missing session signing key")
+		}
+	})
+
+	t.Run("both", func(t *testing.T) {
+		t.Setenv("MINIKMS_SESSION_SIGNING_KEY", "test-key")
+		t.Setenv("MINIKMS_SESSION_SIGNING_KEY_FILE", "/run/secrets/session-key.pem")
+		if _, err := Load(); err == nil {
+			t.Fatal("Load should reject multiple session signing key sources")
+		}
+	})
 }
 
 func TestLoad_MissingRequired(t *testing.T) {

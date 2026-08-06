@@ -594,6 +594,65 @@ func TestGenerateSessionSigningKey(t *testing.T) {
 	}
 }
 
+func TestSessionRemainsValidAcrossRestartAndInstances(t *testing.T) {
+	generatedKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(generatedKey)
+	if err != nil {
+		t.Fatalf("MarshalPKCS8PrivateKey: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+
+	firstKey, err := auth.LoadSessionSigningKey(string(keyPEM), "")
+	if err != nil {
+		t.Fatalf("load first signing key: %v", err)
+	}
+	secondKey, err := auth.LoadSessionSigningKey(string(keyPEM), "")
+	if err != nil {
+		t.Fatalf("load second signing key: %v", err)
+	}
+
+	registry := newMockTokenRegistry()
+	certStore := newMockCertStore()
+	policyStore := newMockPolicyStore()
+	auditLogger := audit.NewAuditLogger(&mockAuditStore{})
+	firstInstance := NewSessionService(firstKey, "test-issuer", time.Hour, registry, certStore, policyStore, auditLogger)
+	secondInstance := NewSessionService(secondKey, "test-issuer", time.Hour, registry, certStore, policyStore, auditLogger)
+
+	ctx := context.Background()
+	_, _, certPEM, serialHex := createTestMemberCert(t)
+	if err := certStore.StoreCertificate(ctx, &pkistore.CertRecord{
+		SerialNumber: serialHex,
+		CertType:     "member",
+		OrgID:        "org-001",
+		CertPEM:      string(certPEM),
+		Status:       "active",
+		IssuedAt:     time.Now().Add(-time.Hour),
+		ExpiresAt:    time.Now().Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("StoreCertificate: %v", err)
+	}
+
+	created, err := firstInstance.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
+		MemberID:   "member-001",
+		OrgID:      "org-001",
+		CertSerial: serialHex,
+	})
+	if err != nil {
+		t.Fatalf("CreateSessionManaged: %v", err)
+	}
+
+	validated, err := secondInstance.ValidateSession(ctx, &ValidateSessionRequest{SessionToken: created.SessionToken})
+	if err != nil {
+		t.Fatalf("ValidateSession: %v", err)
+	}
+	if !validated.Valid {
+		t.Fatal("token issued before restart should be valid on a new instance with the shared key")
+	}
+}
+
 func TestCreateSessionManaged_CustomScopes(t *testing.T) {
 	svc, _, certStore, _ := setupTestSessionService(t)
 	ctx := context.Background()
