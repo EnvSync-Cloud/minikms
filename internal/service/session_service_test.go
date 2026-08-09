@@ -584,7 +584,7 @@ func TestGenerateNonce(t *testing.T) {
 	}
 }
 
-func TestSessionRemainsValidAcrossRestartAndInstances(t *testing.T) {
+func TestSessionTokenValidAcrossServicesWithSharedSigningKey(t *testing.T) {
 	generatedKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -595,21 +595,21 @@ func TestSessionRemainsValidAcrossRestartAndInstances(t *testing.T) {
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
-	firstKey, err := auth.LoadSessionSigningKey(string(keyPEM), "")
+	issuerKey, err := auth.LoadSessionSigningKey(string(keyPEM), "")
 	if err != nil {
-		t.Fatalf("load first signing key: %v", err)
+		t.Fatalf("load issuer signing key: %v", err)
 	}
-	secondKey, err := auth.LoadSessionSigningKey(string(keyPEM), "")
+	validatorKey, err := auth.LoadSessionSigningKey(string(keyPEM), "")
 	if err != nil {
-		t.Fatalf("load second signing key: %v", err)
+		t.Fatalf("load validator signing key: %v", err)
 	}
 
 	registry := newMockTokenRegistry()
 	certStore := newMockCertStore()
 	policyStore := newMockPolicyStore()
 	auditLogger := audit.NewAuditLogger(&mockAuditStore{})
-	firstInstance := NewSessionService(firstKey, "test-issuer", time.Hour, registry, certStore, policyStore, auditLogger)
-	secondInstance := NewSessionService(secondKey, "test-issuer", time.Hour, registry, certStore, policyStore, auditLogger)
+	issuerService := NewSessionService(issuerKey, "test-issuer", time.Hour, registry, certStore, policyStore, auditLogger)
+	validatorService := NewSessionService(validatorKey, "test-issuer", time.Hour, registry, certStore, policyStore, auditLogger)
 
 	ctx := context.Background()
 	_, _, certPEM, serialHex := createTestMemberCert(t)
@@ -625,7 +625,7 @@ func TestSessionRemainsValidAcrossRestartAndInstances(t *testing.T) {
 		t.Fatalf("StoreCertificate: %v", err)
 	}
 
-	created, err := firstInstance.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
+	created, err := issuerService.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
 		MemberID:   "member-001",
 		OrgID:      "org-001",
 		CertSerial: serialHex,
@@ -634,12 +634,12 @@ func TestSessionRemainsValidAcrossRestartAndInstances(t *testing.T) {
 		t.Fatalf("CreateSessionManaged: %v", err)
 	}
 
-	validated, err := secondInstance.ValidateSession(ctx, &ValidateSessionRequest{SessionToken: created.SessionToken})
+	validated, err := validatorService.ValidateSession(ctx, &ValidateSessionRequest{SessionToken: created.SessionToken})
 	if err != nil {
 		t.Fatalf("ValidateSession: %v", err)
 	}
 	if !validated.Valid {
-		t.Fatal("token issued before restart should be valid on a new instance with the shared key")
+		t.Fatal("token issued by one service should be valid in another service using the shared key")
 	}
 }
 
