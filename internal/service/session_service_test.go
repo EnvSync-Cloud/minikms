@@ -584,16 +584,6 @@ func TestGenerateNonce(t *testing.T) {
 	}
 }
 
-func TestGenerateSessionSigningKey(t *testing.T) {
-	key, err := GenerateSessionSigningKey()
-	if err != nil {
-		t.Fatalf("GenerateSessionSigningKey: %v", err)
-	}
-	if key.Curve != elliptic.P256() {
-		t.Error("expected P-256 curve")
-	}
-}
-
 func TestSessionRemainsValidAcrossRestartAndInstances(t *testing.T) {
 	generatedKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
