@@ -104,28 +104,6 @@ func TestLoad_CustomValues(t *testing.T) {
 	}
 }
 
-func TestLoad_RequiresExactlyOneSessionSigningKeySource(t *testing.T) {
-	t.Setenv("MINIKMS_DB_URL", "postgres://localhost/test")
-	t.Setenv("MINIKMS_REDIS_URL", "redis://localhost:6379/0")
-	t.Setenv("MINIKMS_ROOT_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-
-	t.Run("missing", func(t *testing.T) {
-		t.Setenv("MINIKMS_SESSION_SIGNING_KEY", "")
-		t.Setenv("MINIKMS_SESSION_SIGNING_KEY_FILE", "")
-		if _, err := Load(); err == nil {
-			t.Fatal("Load should reject a missing session signing key")
-		}
-	})
-
-	t.Run("both", func(t *testing.T) {
-		t.Setenv("MINIKMS_SESSION_SIGNING_KEY", "test-key")
-		t.Setenv("MINIKMS_SESSION_SIGNING_KEY_FILE", "/run/secrets/session-key.pem")
-		if _, err := Load(); err == nil {
-			t.Fatal("Load should reject multiple session signing key sources")
-		}
-	})
-}
-
 func TestLoad_MissingRequired(t *testing.T) {
 	// Clear all MINIKMS_ env vars
 	for _, env := range os.Environ() {

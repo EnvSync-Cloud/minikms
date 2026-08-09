@@ -1,10 +1,6 @@
 package config
 
-import (
-	"fmt"
-
-	"github.com/kelseyhightower/envconfig"
-)
+import "github.com/kelseyhightower/envconfig"
 
 // Config holds all miniKMS configuration loaded from environment variables.
 type Config struct {
@@ -13,8 +9,8 @@ type Config struct {
 	RedisURL string `envconfig:"MINIKMS_REDIS_URL" required:"true"`
 	RootKey  string `envconfig:"MINIKMS_ROOT_KEY" required:"true"`
 
-	// Session JWT signing key. Configure exactly one source. The direct value
-	// must contain PEM; the file variant is recommended for production secrets.
+	// Session JWT signing key sources. Source selection and key validation are
+	// handled by the auth loader.
 	SessionSigningKey     string `envconfig:"MINIKMS_SESSION_SIGNING_KEY"`
 	SessionSigningKeyFile string `envconfig:"MINIKMS_SESSION_SIGNING_KEY_FILE"`
 
@@ -42,12 +38,6 @@ func Load() (*Config, error) {
 	var cfg Config
 	if err := envconfig.Process("", &cfg); err != nil {
 		return nil, err
-	}
-	if cfg.SessionSigningKey == "" && cfg.SessionSigningKeyFile == "" {
-		return nil, fmt.Errorf("one of MINIKMS_SESSION_SIGNING_KEY or MINIKMS_SESSION_SIGNING_KEY_FILE is required")
-	}
-	if cfg.SessionSigningKey != "" && cfg.SessionSigningKeyFile != "" {
-		return nil, fmt.Errorf("MINIKMS_SESSION_SIGNING_KEY and MINIKMS_SESSION_SIGNING_KEY_FILE are mutually exclusive")
 	}
 	return &cfg, nil
 }
