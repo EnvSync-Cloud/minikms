@@ -56,6 +56,12 @@ services:
       MINIKMS_DB_URL: "postgres://minikms_test:testpass@postgres-test:5432/minikms_test?sslmode=disable"
       MINIKMS_REDIS_URL: "redis://redis-test:6379/0"
       MINIKMS_ROOT_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      MINIKMS_SESSION_SIGNING_KEY: |
+        -----BEGIN PRIVATE KEY-----
+        MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgQCuug1aHmh79pIP8
+        tMtr/8RmJijki0c2oaZanS+x1yWhRANCAATubzhTKHCYNUMOd4x/Sxsv1AbCjPPR
+        +/uwOj2OXWah8oXg2U/DTXbgnt46cEas1yz4UcZvs0oFLTxi+visoABA
+        -----END PRIVATE KEY-----
       MINIKMS_GRPC_ADDR: "0.0.0.0:50051"
     ports:
       - "50051:50051"

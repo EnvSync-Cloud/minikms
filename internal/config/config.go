@@ -9,6 +9,11 @@ type Config struct {
 	RedisURL string `envconfig:"MINIKMS_REDIS_URL" required:"true"`
 	RootKey  string `envconfig:"MINIKMS_ROOT_KEY" required:"true"`
 
+	// Session JWT signing key sources. Source selection and key validation are
+	// handled by the auth loader.
+	SessionSigningKey     string `envconfig:"MINIKMS_SESSION_SIGNING_KEY"`
+	SessionSigningKeyFile string `envconfig:"MINIKMS_SESSION_SIGNING_KEY_FILE"`
+
 	TLSEnabled bool   `envconfig:"MINIKMS_TLS_ENABLED" default:"false"`
 	TLSCert    string `envconfig:"MINIKMS_TLS_CERT"`
 	TLSKey     string `envconfig:"MINIKMS_TLS_KEY"`

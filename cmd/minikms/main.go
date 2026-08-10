@@ -18,6 +18,7 @@ import (
 
 	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
 	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/auth"
 	"github.com/envsync-cloud/minikms/internal/config"
 	grpcadapter "github.com/envsync-cloud/minikms/internal/grpc"
 	"github.com/envsync-cloud/minikms/internal/keys"
@@ -79,12 +80,13 @@ func main() {
 	// Initialize Org CA wrap manager
 	orgCAWrapMgr := keys.NewOrgCAWrapManager(pgStore)
 
-	// Generate session signing key (P-256 for JWT ES256)
-	sessionSigningKey, err := service.GenerateSessionSigningKey()
+	// Load a stable shared session signing key so JWTs survive restarts and can
+	// be verified by every miniKMS replica.
+	sessionSigningKey, err := auth.LoadSessionSigningKey(cfg.SessionSigningKey, cfg.SessionSigningKeyFile)
 	if err != nil {
-		log.Fatalf("Failed to generate session signing key: %v", err)
+		log.Fatalf("Failed to load session signing key: %v", err)
 	}
-	log.Println("Session signing key generated")
+	log.Println("Session signing key loaded successfully")
 
 	// Initialize services
 	kmsSvc := service.NewKMSService(dekManager, auditLogger)

@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -471,13 +470,4 @@ func HasScope(session *ValidateSessionResponse, scope string) bool {
 		}
 	}
 	return false
-}
-
-// GenerateSessionSigningKey generates an ECDSA P-256 key for JWT signing.
-func GenerateSessionSigningKey() (*ecdsa.PrivateKey, error) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate session signing key: %w", err)
-	}
-	return key, nil
 }

@@ -584,13 +584,62 @@ func TestGenerateNonce(t *testing.T) {
 	}
 }
 
-func TestGenerateSessionSigningKey(t *testing.T) {
-	key, err := GenerateSessionSigningKey()
+func TestSessionTokenValidAcrossServicesWithSharedSigningKey(t *testing.T) {
+	generatedKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		t.Fatalf("GenerateSessionSigningKey: %v", err)
+		t.Fatalf("GenerateKey: %v", err)
 	}
-	if key.Curve != elliptic.P256() {
-		t.Error("expected P-256 curve")
+	keyDER, err := x509.MarshalPKCS8PrivateKey(generatedKey)
+	if err != nil {
+		t.Fatalf("MarshalPKCS8PrivateKey: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+
+	issuerKey, err := auth.LoadSessionSigningKey(string(keyPEM), "")
+	if err != nil {
+		t.Fatalf("load issuer signing key: %v", err)
+	}
+	validatorKey, err := auth.LoadSessionSigningKey(string(keyPEM), "")
+	if err != nil {
+		t.Fatalf("load validator signing key: %v", err)
+	}
+
+	registry := newMockTokenRegistry()
+	certStore := newMockCertStore()
+	policyStore := newMockPolicyStore()
+	auditLogger := audit.NewAuditLogger(&mockAuditStore{})
+	issuerService := NewSessionService(issuerKey, "test-issuer", time.Hour, registry, certStore, policyStore, auditLogger)
+	validatorService := NewSessionService(validatorKey, "test-issuer", time.Hour, registry, certStore, policyStore, auditLogger)
+
+	ctx := context.Background()
+	_, _, certPEM, serialHex := createTestMemberCert(t)
+	if err := certStore.StoreCertificate(ctx, &pkistore.CertRecord{
+		SerialNumber: serialHex,
+		CertType:     "member",
+		OrgID:        "org-001",
+		CertPEM:      string(certPEM),
+		Status:       "active",
+		IssuedAt:     time.Now().Add(-time.Hour),
+		ExpiresAt:    time.Now().Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("StoreCertificate: %v", err)
+	}
+
+	created, err := issuerService.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
+		MemberID:   "member-001",
+		OrgID:      "org-001",
+		CertSerial: serialHex,
+	})
+	if err != nil {
+		t.Fatalf("CreateSessionManaged: %v", err)
+	}
+
+	validated, err := validatorService.ValidateSession(ctx, &ValidateSessionRequest{SessionToken: created.SessionToken})
+	if err != nil {
+		t.Fatalf("ValidateSession: %v", err)
+	}
+	if !validated.Valid {
+		t.Fatal("token issued by one service should be valid in another service using the shared key")
 	}
 }
 
