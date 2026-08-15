@@ -5,10 +5,16 @@ import (
 	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/envsync-cloud/minikms/internal/crypto"
+)
+
+var (
+	ErrOrgCAWrapNotFound = errors.New("Org CA wrap not found")
+	ErrOrgCAWrapRevoked  = errors.New("Org CA wrap revoked")
 )
 
 // OrgCAWrapRecord represents a per-member wrapped Org CA private key.
@@ -92,10 +98,10 @@ func (m *OrgCAWrapManager) UnwrapOrgCA(
 		return nil, fmt.Errorf("failed to get Org CA wrap: %w", err)
 	}
 	if wrap == nil {
-		return nil, fmt.Errorf("no Org CA wrap found for member %s in org %s", memberID, orgID)
+		return nil, fmt.Errorf("%w for member %s in org %s", ErrOrgCAWrapNotFound, memberID, orgID)
 	}
 	if wrap.RevokedAt != nil {
-		return nil, fmt.Errorf("Org CA wrap for member %s has been revoked", memberID)
+		return nil, fmt.Errorf("%w for member %s", ErrOrgCAWrapRevoked, memberID)
 	}
 
 	// Unwrap
@@ -151,10 +157,10 @@ func (m *OrgCAWrapManager) GetWrapData(
 		return nil, nil, fmt.Errorf("failed to get Org CA wrap: %w", err)
 	}
 	if wrap == nil {
-		return nil, nil, fmt.Errorf("no Org CA wrap found for member %s in org %s", memberID, orgID)
+		return nil, nil, fmt.Errorf("%w for member %s in org %s", ErrOrgCAWrapNotFound, memberID, orgID)
 	}
 	if wrap.RevokedAt != nil {
-		return nil, nil, fmt.Errorf("Org CA wrap for member %s has been revoked", memberID)
+		return nil, nil, fmt.Errorf("%w for member %s", ErrOrgCAWrapRevoked, memberID)
 	}
 
 	return wrap.EphemeralPub, wrap.WrappedKey, nil

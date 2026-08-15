@@ -2,10 +2,14 @@ package keys
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/envsync-cloud/minikms/internal/crypto"
 )
+
+// ErrActiveKeyVersionNotFound indicates that a scope has no active DEK.
+var ErrActiveKeyVersionNotFound = errors.New("active key version not found")
 
 // KeyVersionManager provides key version lifecycle operations.
 type KeyVersionManager struct {
@@ -28,7 +32,7 @@ func (m *KeyVersionManager) GetKeyInfo(ctx context.Context, orgID, appID string)
 		return nil, fmt.Errorf("failed to get key info: %w", err)
 	}
 	if record == nil {
-		return nil, fmt.Errorf("no active key version for org=%s app=%s", orgID, appID)
+		return nil, ErrActiveKeyVersionNotFound
 	}
 	// Strip the encrypted key material from the response
 	record.EncryptedKey = nil
