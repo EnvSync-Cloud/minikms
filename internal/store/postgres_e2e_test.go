@@ -3,6 +3,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/envsync-cloud/minikms/internal/audit"
 	"github.com/envsync-cloud/minikms/internal/auth"
+	"github.com/envsync-cloud/minikms/internal/escrow"
 	"github.com/envsync-cloud/minikms/internal/keys"
 )
 
@@ -213,5 +215,50 @@ func TestPostgres_TokenRegistry(t *testing.T) {
 	err = store.CleanupExpired(ctx)
 	if err != nil {
 		t.Fatalf("CleanupExpired: %v", err)
+	}
+}
+
+func TestPostgres_EscrowStoreGenerationReplacement(t *testing.T) {
+	pgStore := setupPostgresStore(t)
+	ctx := context.Background()
+	orgID := "e2e-escrow-" + time.Now().Format("150405.000000")
+
+	first := &escrow.Set{
+		ID: "set-1-" + orgID, OrgID: orgID, KeyType: escrow.KeyTypeOrgCA,
+		TotalShares: 3, Threshold: 2, SecretHash: bytes.Repeat([]byte{1}, 32),
+		Status: "active", CreatedAt: time.Now().UTC(),
+	}
+	firstShares := []*escrow.Share{
+		{ID: "share-1-" + orgID, SetID: first.ID, ShareIndex: 1, EncryptedShare: []byte("cipher-1"), ShareHash: bytes.Repeat([]byte{1}, 32), CustodianID: "alice", CreatedAt: first.CreatedAt},
+		{ID: "share-2-" + orgID, SetID: first.ID, ShareIndex: 2, EncryptedShare: []byte("cipher-2"), ShareHash: bytes.Repeat([]byte{2}, 32), CustodianID: "bob", CreatedAt: first.CreatedAt},
+		{ID: "share-3-" + orgID, SetID: first.ID, ShareIndex: 3, EncryptedShare: []byte("cipher-3"), ShareHash: bytes.Repeat([]byte{3}, 32), CustodianID: "carol", CreatedAt: first.CreatedAt},
+	}
+	if err := pgStore.ReplaceEscrowSet(ctx, first, firstShares, ""); err != nil {
+		t.Fatalf("ReplaceEscrowSet(first): %v", err)
+	}
+	got, shares, err := pgStore.GetActiveEscrowSet(ctx, orgID, escrow.KeyTypeOrgCA)
+	if err != nil || got == nil || got.ID != first.ID || len(shares) != 3 {
+		t.Fatalf("GetActiveEscrowSet: set=%+v shares=%d err=%v", got, len(shares), err)
+	}
+	if err := pgStore.MarkEscrowShareExported(ctx, first.ID, 1, time.Now().UTC()); err != nil {
+		t.Fatalf("MarkEscrowShareExported: %v", err)
+	}
+
+	second := &escrow.Set{
+		ID: "set-2-" + orgID, OrgID: orgID, KeyType: escrow.KeyTypeOrgCA,
+		TotalShares: 3, Threshold: 2, SecretHash: bytes.Repeat([]byte{1}, 32),
+		Status: "active", CreatedAt: time.Now().UTC(),
+	}
+	secondShares := []*escrow.Share{
+		{ID: "share-4-" + orgID, SetID: second.ID, ShareIndex: 1, EncryptedShare: []byte("cipher-4"), ShareHash: bytes.Repeat([]byte{4}, 32), CustodianID: "alice", CreatedAt: second.CreatedAt},
+		{ID: "share-5-" + orgID, SetID: second.ID, ShareIndex: 2, EncryptedShare: []byte("cipher-5"), ShareHash: bytes.Repeat([]byte{5}, 32), CustodianID: "bob", CreatedAt: second.CreatedAt},
+		{ID: "share-6-" + orgID, SetID: second.ID, ShareIndex: 3, EncryptedShare: []byte("cipher-6"), ShareHash: bytes.Repeat([]byte{6}, 32), CustodianID: "carol", CreatedAt: second.CreatedAt},
+	}
+	if err := pgStore.ReplaceEscrowSet(ctx, second, secondShares, first.ID); err != nil {
+		t.Fatalf("ReplaceEscrowSet(recovery): %v", err)
+	}
+	got, _, err = pgStore.GetActiveEscrowSet(ctx, orgID, escrow.KeyTypeOrgCA)
+	if err != nil || got == nil || got.ID != second.ID {
+		t.Fatalf("fresh generation is not active: set=%+v err=%v", got, err)
 	}
 }

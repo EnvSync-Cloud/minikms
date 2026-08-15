@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/escrow"
 	"github.com/envsync-cloud/minikms/internal/keys"
 	pkiPkg "github.com/envsync-cloud/minikms/internal/pki"
 	"github.com/envsync-cloud/minikms/internal/pkistore"
@@ -58,6 +61,57 @@ func TestPKIService_CreateOrgCA(t *testing.T) {
 	}
 	if !cert.IsCA {
 		t.Fatal("org CA cert should be a CA")
+	}
+}
+
+func TestPKIService_OrgBootstrapEscrowRecovery(t *testing.T) {
+	ctx := context.Background()
+	rootCert, rootKey, _, err := pkiPkg.CreateRootCA("Test Root CA", 10*365*24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateRootCA: %v", err)
+	}
+	auditStore := testutil.NewMockAuditStore()
+	auditLogger := audit.NewAuditLogger(auditStore)
+	escrowStore := testutil.NewMockEscrowStore()
+	escrowManager, err := escrow.NewManager(escrowStore, auditLogger, bytes.Repeat([]byte{0x77}, 32))
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	custodians := []string{"alice", "bob", "carol", "dave", "erin"}
+
+	svc := NewPKIService(rootCert, rootKey, auditLogger, testutil.NewMockPKICertStore())
+	svc.SetShamirConfig(5, 3)
+	svc.SetEscrowManager(escrowManager, custodians)
+	_, _, orgCAKey, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{OrgID: "org-escrow", OrgName: "Escrow Org"})
+	if err != nil {
+		t.Fatalf("CreateOrgCAFull: %v", err)
+	}
+
+	set, _, err := escrowStore.GetActiveEscrowSet(ctx, "org-escrow", escrow.KeyTypeOrgCA)
+	if err != nil || set == nil {
+		t.Fatalf("org bootstrap did not create escrow: set=%+v err=%v", set, err)
+	}
+	packages := make([][]byte, 3)
+	for i, custodian := range custodians[:3] {
+		packages[i], err = escrowManager.ExportShare(ctx, "org-escrow", escrow.KeyTypeOrgCA, custodian, "admin-1")
+		if err != nil {
+			t.Fatalf("ExportShare(%s): %v", custodian, err)
+		}
+	}
+	recovered, newSet, err := escrowManager.RecoverAndReseal(ctx, "org-escrow", escrow.KeyTypeOrgCA, packages, "admin-1")
+	if err != nil {
+		t.Fatalf("RecoverAndReseal: %v", err)
+	}
+	defer crypto.ZeroizeBytes(recovered)
+	recoveredKey, err := crypto.UnmarshalECPrivateKey(recovered)
+	if err != nil {
+		t.Fatalf("UnmarshalECPrivateKey: %v", err)
+	}
+	if recoveredKey.D.Cmp(orgCAKey.D) != 0 {
+		t.Fatal("recovered Org CA key does not match the bootstrap key")
+	}
+	if newSet.ID == set.ID {
+		t.Fatal("recovery did not re-seal into a fresh generation")
 	}
 }
 

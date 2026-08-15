@@ -2,6 +2,8 @@ package keys
 
 import (
 	"encoding/hex"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -103,4 +105,34 @@ func TestRootKeyHolder_IsLoaded(t *testing.T) {
 			t.Fatal("should be loaded after Load()")
 		}
 	})
+}
+
+func TestLoadRootKeyHex_ValueAndProtectedFile(t *testing.T) {
+	value := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	got, err := LoadRootKeyHex(value, "")
+	if err != nil || got != value {
+		t.Fatalf("LoadRootKeyHex(value): got=%q err=%v", got, err)
+	}
+
+	path := filepath.Join(t.TempDir(), "recovered-root-key")
+	if err := os.WriteFile(path, []byte(value+"\n"), 0o600); err != nil {
+		t.Fatalf("write root key: %v", err)
+	}
+	got, err = LoadRootKeyHex("", path)
+	if err != nil || got != value {
+		t.Fatalf("LoadRootKeyHex(file): got=%q err=%v", got, err)
+	}
+
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if _, err := LoadRootKeyHex("", path); err == nil {
+		t.Fatal("LoadRootKeyHex accepted a group/world-readable key file")
+	}
+	if _, err := LoadRootKeyHex(value, path); err == nil {
+		t.Fatal("LoadRootKeyHex accepted two configured sources")
+	}
+	if _, err := LoadRootKeyHex("", ""); err == nil {
+		t.Fatal("LoadRootKeyHex accepted no configured source")
+	}
 }
