@@ -1,8 +1,10 @@
 package keys
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"sync"
 )
 
@@ -79,4 +81,32 @@ func (h *RootKeyHolder) IsLoaded() bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.loaded
+}
+
+// LoadRootKeyHex loads a hex-encoded root key from exactly one injected value
+// or owner-readable secret file. Recovery writes this same file format.
+func LoadRootKeyHex(value, path string) (string, error) {
+	if value == "" && path == "" {
+		return "", fmt.Errorf("root key is not configured")
+	}
+	if value != "" && path != "" {
+		return "", fmt.Errorf("configure only one root key source")
+	}
+	if value != "" {
+		return value, nil
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("stat root key file: %w", err)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("root key file permissions must be 0600 or stricter")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read root key file: %w", err)
+	}
+	defer zeroize(data)
+	return string(bytes.TrimSpace(data)), nil
 }

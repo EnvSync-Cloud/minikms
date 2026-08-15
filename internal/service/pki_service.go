@@ -11,6 +11,7 @@ import (
 
 	"github.com/envsync-cloud/minikms/internal/audit"
 	"github.com/envsync-cloud/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/escrow"
 	"github.com/envsync-cloud/minikms/internal/keys"
 	"github.com/envsync-cloud/minikms/internal/pki"
 	"github.com/envsync-cloud/minikms/internal/pkistore"
@@ -25,6 +26,8 @@ type PKIService struct {
 	orgCAWrapMgr *keys.OrgCAWrapManager
 	shamirShares int
 	shamirThresh int
+	escrowMgr    *escrow.Manager
+	custodians   []string
 }
 
 // NewPKIService creates a new PKIService.
@@ -58,6 +61,12 @@ func (s *PKIService) SetShamirConfig(shares, threshold int) {
 	s.shamirThresh = threshold
 }
 
+// SetEscrowManager enables automatic Org CA escrow during org bootstrap.
+func (s *PKIService) SetEscrowManager(manager *escrow.Manager, custodians []string) {
+	s.escrowMgr = manager
+	s.custodians = append([]string(nil), custodians...)
+}
+
 // CreateOrgCARequest represents a request to create an org intermediate CA.
 type CreateOrgCARequest struct {
 	OrgID   string
@@ -85,6 +94,18 @@ func (s *PKIService) CreateOrgCAFull(ctx context.Context, req *CreateOrgCAReques
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	serialHex := cert.SerialNumber.Text(16)
+
+	// Escrow must complete before the new Org CA is exposed. On restarts,
+	// EnsureSplit preserves the generation already distributed to custodians.
+	if s.escrowMgr != nil {
+		orgCAPrivBytes := crypto.MarshalECPrivateKey(key)
+		_, _, escrowErr := s.escrowMgr.EnsureSplit(ctx, req.OrgID, escrow.KeyTypeOrgCA,
+			orgCAPrivBytes, s.custodians, s.shamirThresh, "system")
+		crypto.ZeroizeBytes(orgCAPrivBytes)
+		if escrowErr != nil {
+			return nil, nil, nil, fmt.Errorf("failed to escrow org CA key: %w", escrowErr)
+		}
+	}
 
 	// Persist to database
 	if s.store != nil {
@@ -221,21 +242,6 @@ func (s *PKIService) CreateOrgWithWrapping(ctx context.Context, req *CreateOrgWi
 			return nil, fmt.Errorf("failed to wrap Org CA key: %w", err)
 		}
 	}
-
-	// Step 4: Shamir-split Org CA private key for disaster recovery
-	orgCAPrivBytes := crypto.MarshalECPrivateKey(orgCAKey)
-	if s.shamirShares > 0 && s.shamirThresh > 0 {
-		_, err := crypto.SplitKey(orgCAPrivBytes, s.shamirShares, s.shamirThresh)
-		if err != nil {
-			// Log but don't fail — Shamir is for DR, not critical path
-			_ = s.auditLogger.Log(ctx, req.OrgID, "shamir_split_failed", "system",
-				fmt.Sprintf("Failed to Shamir-split Org CA key: %v", err), "")
-		}
-		// TODO: Store encrypted shares in key_escrow_shares table
-	}
-
-	// Step 5: Zeroize Org CA private key from memory
-	crypto.ZeroizeBytes(orgCAPrivBytes)
 
 	_ = s.auditLogger.Log(ctx, req.OrgID, "org_created_with_wrapping", req.CreatorMemberID,
 		fmt.Sprintf("Org %s created with zero-trust key wrapping", req.OrgName), "")

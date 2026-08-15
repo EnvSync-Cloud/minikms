@@ -97,6 +97,7 @@ jobs:
         run: |
           psql "$MINIKMS_DB_URL" -f migrations/001_initial_schema.sql
           psql "$MINIKMS_DB_URL" -f migrations/002_vault_storage.sql
+          psql "$MINIKMS_DB_URL" -f migrations/003_escrow_recovery.sql
       - name: Run E2E tests
         env:
           MINIKMS_DB_URL: postgres://minikms_test:testpass@localhost:5432/minikms_test?sslmode=disable

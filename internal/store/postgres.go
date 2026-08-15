@@ -11,6 +11,7 @@ import (
 
 	"github.com/envsync-cloud/minikms/internal/audit"
 	"github.com/envsync-cloud/minikms/internal/auth"
+	"github.com/envsync-cloud/minikms/internal/escrow"
 	"github.com/envsync-cloud/minikms/internal/keys"
 	"github.com/envsync-cloud/minikms/internal/pkistore"
 )
@@ -195,6 +196,114 @@ func (s *PostgresStore) CleanupExpired(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx,
 		`DELETE FROM token_registry WHERE expires_at < NOW()`)
 	return err
+}
+
+// --- EscrowStore interface implementation ---
+
+func (s *PostgresStore) GetActiveEscrowSet(ctx context.Context, orgID, keyType string) (*escrow.Set, []*escrow.Share, error) {
+	row := s.pool.QueryRow(ctx,
+		`SELECT id, org_id, key_type, total_shares, threshold, secret_hash, status, created_at, recovered_at
+		 FROM key_escrow_sets
+		 WHERE org_id = $1 AND key_type = $2 AND status = 'active'
+		 LIMIT 1`, orgID, keyType)
+
+	var set escrow.Set
+	if err := row.Scan(&set.ID, &set.OrgID, &set.KeyType, &set.TotalShares, &set.Threshold,
+		&set.SecretHash, &set.Status, &set.CreatedAt, &set.RecoveredAt); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil, nil
+		}
+		return nil, nil, err
+	}
+
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, set_id, share_index, encrypted_share, share_hash, custodian_id, created_at, exported_at
+		 FROM key_escrow_shares
+		 WHERE set_id = $1
+		 ORDER BY share_index`, set.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	shares := make([]*escrow.Share, 0, set.TotalShares)
+	for rows.Next() {
+		var share escrow.Share
+		if err := rows.Scan(&share.ID, &share.SetID, &share.ShareIndex, &share.EncryptedShare,
+			&share.ShareHash, &share.CustodianID, &share.CreatedAt, &share.ExportedAt); err != nil {
+			return nil, nil, err
+		}
+		shares = append(shares, &share)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	if len(shares) != set.TotalShares {
+		return nil, nil, fmt.Errorf("escrow set %s has %d shares, expected %d", set.ID, len(shares), set.TotalShares)
+	}
+	return &set, shares, nil
+}
+
+func (s *PostgresStore) ReplaceEscrowSet(ctx context.Context, set *escrow.Set, shares []*escrow.Share, recoveredSetID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if recoveredSetID != "" {
+		result, err := tx.Exec(ctx,
+			`UPDATE key_escrow_sets
+			 SET status = 'retired', recovered_at = NOW()
+			 WHERE id = $1 AND org_id = $2 AND key_type = $3 AND status = 'active'`,
+			recoveredSetID, set.OrgID, set.KeyType)
+		if err != nil {
+			return err
+		}
+		if result.RowsAffected() != 1 {
+			return fmt.Errorf("active recovered escrow set changed during recovery")
+		}
+	} else {
+		if _, err := tx.Exec(ctx,
+			`UPDATE key_escrow_sets SET status = 'retired'
+			 WHERE org_id = $1 AND key_type = $2 AND status = 'active'`,
+			set.OrgID, set.KeyType); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO key_escrow_sets
+		 (id, org_id, key_type, total_shares, threshold, secret_hash, status, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, 'active', $7)`,
+		set.ID, set.OrgID, set.KeyType, set.TotalShares, set.Threshold, set.SecretHash, set.CreatedAt); err != nil {
+		return err
+	}
+
+	for _, share := range shares {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO key_escrow_shares
+			 (id, org_id, share_index, total_shares, threshold, encrypted_share, custodian_id, created_at, set_id, share_hash)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			share.ID, set.OrgID, share.ShareIndex, set.TotalShares, set.Threshold,
+			share.EncryptedShare, share.CustodianID, share.CreatedAt, set.ID, share.ShareHash); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PostgresStore) MarkEscrowShareExported(ctx context.Context, setID string, shareIndex int, exportedAt time.Time) error {
+	result, err := s.pool.Exec(ctx,
+		`UPDATE key_escrow_shares SET exported_at = $1
+		 WHERE set_id = $2 AND share_index = $3`, exportedAt, setID, shareIndex)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("escrow share not found")
+	}
+	return nil
 }
 
 // --- AuditStore interface implementation ---

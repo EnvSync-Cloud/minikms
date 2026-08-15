@@ -13,11 +13,13 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Starting test databases..."
-docker compose -f "$COMPOSE_FILE" up -d --wait
+docker compose -f "$COMPOSE_FILE" up -d --wait postgres-test redis-test
 
 echo "Running migrations..."
 export MINIKMS_DB_URL="postgres://minikms_test:testpass@localhost:5433/minikms_test?sslmode=disable"
-psql "$MINIKMS_DB_URL" -f "$PROJECT_DIR/migrations/001_initial_schema.sql"
+psql -v ON_ERROR_STOP=1 "$MINIKMS_DB_URL" -f "$PROJECT_DIR/migrations/001_initial_schema.sql"
+psql -v ON_ERROR_STOP=1 "$MINIKMS_DB_URL" -f "$PROJECT_DIR/migrations/002_vault_storage.sql"
+psql -v ON_ERROR_STOP=1 "$MINIKMS_DB_URL" -f "$PROJECT_DIR/migrations/003_escrow_recovery.sql"
 
 echo "Running E2E tests..."
 export MINIKMS_REDIS_URL="redis://localhost:6380/0"

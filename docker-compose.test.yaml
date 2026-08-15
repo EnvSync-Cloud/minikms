@@ -41,7 +41,8 @@ services:
       - -c
       - |
         psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/001_initial_schema.sql &&
-        psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/002_vault_storage.sql
+        psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/002_vault_storage.sql &&
+        psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/003_escrow_recovery.sql
 
   minikms:
     build: .

@@ -4,10 +4,11 @@ import "github.com/kelseyhightower/envconfig"
 
 // Config holds all miniKMS configuration loaded from environment variables.
 type Config struct {
-	GRPCAddr string `envconfig:"MINIKMS_GRPC_ADDR" default:"0.0.0.0:50051"`
-	DBUrl    string `envconfig:"MINIKMS_DB_URL" required:"true"`
-	RedisURL string `envconfig:"MINIKMS_REDIS_URL" required:"true"`
-	RootKey  string `envconfig:"MINIKMS_ROOT_KEY" required:"true"`
+	GRPCAddr    string `envconfig:"MINIKMS_GRPC_ADDR" default:"0.0.0.0:50051"`
+	DBUrl       string `envconfig:"MINIKMS_DB_URL" required:"true"`
+	RedisURL    string `envconfig:"MINIKMS_REDIS_URL" required:"true"`
+	RootKey     string `envconfig:"MINIKMS_ROOT_KEY"`
+	RootKeyFile string `envconfig:"MINIKMS_ROOT_KEY_FILE"`
 
 	// Session JWT signing key sources. Source selection and key validation are
 	// handled by the auth loader.
@@ -31,6 +32,13 @@ type Config struct {
 	// Shamir defaults
 	ShamirTotalShares int `envconfig:"MINIKMS_SHAMIR_TOTAL_SHARES" default:"5"`
 	ShamirThreshold   int `envconfig:"MINIKMS_SHAMIR_THRESHOLD" default:"3"`
+
+	// Escrow is opt-in because its seal key must come from an independent HSM or
+	// secret-manager entry, never from the root key being protected.
+	EscrowEnabled     bool   `envconfig:"MINIKMS_ESCROW_ENABLED" default:"false"`
+	EscrowSealKey     string `envconfig:"MINIKMS_ESCROW_SEAL_KEY"`
+	EscrowSealKeyFile string `envconfig:"MINIKMS_ESCROW_SEAL_KEY_FILE"`
+	EscrowCustodians  string `envconfig:"MINIKMS_ESCROW_CUSTODIANS" default:"custodian-1,custodian-2,custodian-3,custodian-4,custodian-5"`
 }
 
 // Load reads config from environment variables.

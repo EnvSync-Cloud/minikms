@@ -5,6 +5,7 @@ GO=go
 
 build:
 	$(GO) build -o bin/$(BINARY_NAME) ./cmd/minikms
+	$(GO) build -o bin/minikms-escrow ./cmd/minikms-escrow
 
 run: build
 	./bin/$(BINARY_NAME)
