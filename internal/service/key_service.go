@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/envsync-cloud/minikms/internal/audit"
@@ -38,9 +39,13 @@ type CreateDataKeyResponse struct {
 
 // CreateDataKey creates a new data encryption key for a scope.
 func (s *KeyService) CreateDataKey(ctx context.Context, req *CreateDataKeyRequest) (*CreateDataKeyResponse, error) {
+	if err := validateKeyRequest(req); err != nil {
+		return nil, err
+	}
+
 	_, keyVersionID, err := s.dekManager.GetOrCreateDEK(ctx, req.TenantID, req.ScopeID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create data key: %w", err)
+		return nil, internalError("failed to create data key", err)
 	}
 
 	_ = s.auditLogger.Log(ctx, req.TenantID, "data_key_created", "system",
@@ -64,9 +69,19 @@ type RotateDataKeyResponse struct {
 
 // RotateDataKey rotates the data encryption key for a scope.
 func (s *KeyService) RotateDataKey(ctx context.Context, req *RotateDataKeyRequest) (*RotateDataKeyResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := requireFields(
+		requiredField("tenant_id", req.TenantID),
+		requiredField("scope_id", req.ScopeID),
+	); err != nil {
+		return nil, err
+	}
+
 	newID, err := s.dekManager.RotateDEK(ctx, req.TenantID, req.ScopeID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to rotate data key: %w", err)
+		return nil, internalError("failed to rotate data key", err)
 	}
 
 	_ = s.auditLogger.Log(ctx, req.TenantID, "data_key_rotated", "system",
@@ -92,9 +107,22 @@ type GetKeyInfoResponse struct {
 
 // GetKeyInfo returns metadata about the active key version.
 func (s *KeyService) GetKeyInfo(ctx context.Context, req *GetKeyInfoRequest) (*GetKeyInfoResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := requireFields(
+		requiredField("tenant_id", req.TenantID),
+		requiredField("scope_id", req.ScopeID),
+	); err != nil {
+		return nil, err
+	}
+
 	record, err := s.versionManager.GetKeyInfo(ctx, req.TenantID, req.ScopeID)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, keys.ErrActiveKeyVersionNotFound) {
+			return nil, NewDomainError(ErrorNotFound, "active key version not found", err)
+		}
+		return nil, internalError("failed to get key information", err)
 	}
 
 	return &GetKeyInfoResponse{
@@ -104,4 +132,14 @@ func (s *KeyService) GetKeyInfo(ctx context.Context, req *GetKeyInfoRequest) (*G
 		MaxEncryptions:  record.MaxEncryptions,
 		Status:          record.Status,
 	}, nil
+}
+
+func validateKeyRequest(req *CreateDataKeyRequest) error {
+	if req == nil {
+		return invalidArgument("request is required")
+	}
+	return requireFields(
+		requiredField("tenant_id", req.TenantID),
+		requiredField("scope_id", req.ScopeID),
+	)
 }

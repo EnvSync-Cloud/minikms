@@ -45,7 +45,7 @@ func (a *SessionAdapter) CreateSession(ctx context.Context, req *pb.CreateSessio
 	}
 
 	if err != nil {
-		return nil, status.Errorf(codes.Unauthenticated, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	return &pb.CreateSessionResponse{
@@ -60,7 +60,7 @@ func (a *SessionAdapter) ValidateSession(ctx context.Context, req *pb.ValidateSe
 		SessionToken: req.SessionToken,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	pbResp := &pb.ValidateSessionResponse{
@@ -81,7 +81,7 @@ func (a *SessionAdapter) ValidateSession(ctx context.Context, req *pb.ValidateSe
 func (a *SessionAdapter) RevokeSession(ctx context.Context, req *pb.RevokeSessionRequest) (*pb.RevokeSessionResponse, error) {
 	err := a.sessionSvc.RevokeSession(ctx, req.SessionToken)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	return &pb.RevokeSessionResponse{Success: true}, nil
@@ -90,7 +90,7 @@ func (a *SessionAdapter) RevokeSession(ctx context.Context, req *pb.RevokeSessio
 func (a *SessionAdapter) RevokeMemberSessions(ctx context.Context, req *pb.RevokeMemberSessionsRequest) (*pb.RevokeMemberSessionsResponse, error) {
 	count, err := a.sessionSvc.RevokeMemberSessions(ctx, req.MemberId, req.OrgId)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	return &pb.RevokeMemberSessionsResponse{RevokedCount: int32(count)}, nil
@@ -99,7 +99,7 @@ func (a *SessionAdapter) RevokeMemberSessions(ctx context.Context, req *pb.Revok
 func (a *SessionAdapter) ListSessions(ctx context.Context, req *pb.ListSessionsRequest) (*pb.ListSessionsResponse, error) {
 	resp, err := a.sessionSvc.ListSessions(ctx, req.MemberId, req.OrgId)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	sessions := make([]*pb.SessionInfo, len(resp.Sessions))

@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"time"
 
@@ -87,33 +88,34 @@ type VaultWriteResponse struct {
 // Write stores an encrypted value in the vault.
 // Encryption pipeline: receives Layer 1 output → applies Layer 2 (ECIES) → applies Layer 3 (KMS envelope).
 func (v *VaultService) Write(ctx context.Context, sessionToken string, req *VaultWriteRequest) (*VaultWriteResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := validateVaultFields(req.OrgID, req.ScopeID, req.EntryType, req.Key, true); err != nil {
+		return nil, err
+	}
+
 	// Validate session
-	session, err := v.sessionService.ValidateSessionFromToken(ctx, sessionToken)
+	_, err := v.authorize(ctx, sessionToken, req.OrgID, "vault:write")
 	if err != nil {
-		return nil, fmt.Errorf("session validation failed: %w", err)
-	}
-	if !HasScope(session, "vault:write") {
-		return nil, fmt.Errorf("insufficient scope: vault:write required")
-	}
-	if session.OrgID != req.OrgID {
-		return nil, fmt.Errorf("session org mismatch")
+		return nil, err
 	}
 
 	// Layer 2: ECIES encrypt with Org CA public key
 	orgCAPub, err := v.getOrgCAPublicKey(ctx, req.OrgID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get Org CA public key: %w", err)
+		return nil, err
 	}
 
 	eciesOutput, err := crypto.ECIESEncrypt(orgCAPub, req.Value, "envsync-ecies-v1", req.OrgID, []byte(req.OrgID))
 	if err != nil {
-		return nil, fmt.Errorf("ECIES encryption failed: %w", err)
+		return nil, internalError("ECIES encryption failed", err)
 	}
 
 	// Layer 3: KMS envelope encryption
 	dek, keyVersionID, err := v.dekManager.GetOrCreateDEK(ctx, req.OrgID, req.ScopeID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get DEK: %w", err)
+		return nil, internalError("failed to get DEK", err)
 	}
 	defer zeroize(dek)
 
@@ -124,13 +126,13 @@ func (v *VaultService) Write(ctx context.Context, sessionToken string, req *Vaul
 
 	kmsCiphertext, err := crypto.Encrypt(dek, eciesOutput, []byte(aad))
 	if err != nil {
-		return nil, fmt.Errorf("KMS encryption failed: %w", err)
+		return nil, internalError("KMS encryption failed", err)
 	}
 
 	// Get next version
 	version, err := v.vaultStore.GetNextVaultVersion(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get next version: %w", err)
+		return nil, internalError("failed to get next vault version", err)
 	}
 
 	// Store
@@ -147,7 +149,7 @@ func (v *VaultService) Write(ctx context.Context, sessionToken string, req *Vaul
 	}
 
 	if err := v.vaultStore.WriteVaultEntry(ctx, entry); err != nil {
-		return nil, fmt.Errorf("failed to write vault entry: %w", err)
+		return nil, internalError("failed to write vault entry", err)
 	}
 
 	_ = v.auditLogger.Log(ctx, req.OrgID, "vault_write", req.CreatedBy,
@@ -193,25 +195,26 @@ type VaultReadResponse struct {
 // For BYOK: returns KMS-unwrapped ECIES blob + member wrap data for client-side decryption.
 // For managed: performs full server-side ECIES unwrap, returns Layer 1 output.
 func (v *VaultService) Read(ctx context.Context, sessionToken string, req *VaultReadRequest) (*VaultReadResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := validateVaultFields(req.OrgID, req.ScopeID, req.EntryType, req.Key, true); err != nil {
+		return nil, err
+	}
+
 	// Validate session
-	session, err := v.sessionService.ValidateSessionFromToken(ctx, sessionToken)
+	session, err := v.authorize(ctx, sessionToken, req.OrgID, "vault:read")
 	if err != nil {
-		return nil, fmt.Errorf("session validation failed: %w", err)
-	}
-	if !HasScope(session, "vault:read") {
-		return nil, fmt.Errorf("insufficient scope: vault:read required")
-	}
-	if session.OrgID != req.OrgID {
-		return nil, fmt.Errorf("session org mismatch")
+		return nil, err
 	}
 
 	// Fetch entry
 	entry, err := v.vaultStore.GetLatestVaultEntry(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read vault entry: %w", err)
+		return nil, internalError("failed to read vault entry", err)
 	}
 	if entry == nil {
-		return nil, fmt.Errorf("vault entry not found")
+		return nil, NewDomainError(ErrorNotFound, "vault entry not found", nil)
 	}
 
 	return v.decryptEntry(ctx, session, entry, req.ClientSideDecrypt)
@@ -230,25 +233,29 @@ type VaultReadVersionRequest struct {
 
 // ReadVersion retrieves a specific version of a vault entry.
 func (v *VaultService) ReadVersion(ctx context.Context, sessionToken string, req *VaultReadVersionRequest) (*VaultReadResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := validateVaultFields(req.OrgID, req.ScopeID, req.EntryType, req.Key, true); err != nil {
+		return nil, err
+	}
+	if req.Version <= 0 {
+		return nil, invalidArgument("version must be greater than zero")
+	}
+
 	// Validate session
-	session, err := v.sessionService.ValidateSessionFromToken(ctx, sessionToken)
+	session, err := v.authorize(ctx, sessionToken, req.OrgID, "vault:read")
 	if err != nil {
-		return nil, fmt.Errorf("session validation failed: %w", err)
-	}
-	if !HasScope(session, "vault:read") {
-		return nil, fmt.Errorf("insufficient scope: vault:read required")
-	}
-	if session.OrgID != req.OrgID {
-		return nil, fmt.Errorf("session org mismatch")
+		return nil, err
 	}
 
 	// Fetch specific version
 	entry, err := v.vaultStore.GetVaultEntryVersion(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID, req.Version)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read vault entry version: %w", err)
+		return nil, internalError("failed to read vault entry version", err)
 	}
 	if entry == nil {
-		return nil, fmt.Errorf("vault entry version not found")
+		return nil, NewDomainError(ErrorNotFound, "vault entry version not found", nil)
 	}
 
 	return v.decryptEntry(ctx, session, entry, req.ClientSideDecrypt)
@@ -265,20 +272,21 @@ type VaultDeleteRequest struct {
 
 // Delete performs a soft delete (marks as deleted, recoverable).
 func (v *VaultService) Delete(ctx context.Context, sessionToken string, req *VaultDeleteRequest) error {
+	if req == nil {
+		return invalidArgument("request is required")
+	}
+	if err := validateVaultFields(req.OrgID, req.ScopeID, req.EntryType, req.Key, true); err != nil {
+		return err
+	}
+
 	// Validate session
-	session, err := v.sessionService.ValidateSessionFromToken(ctx, sessionToken)
+	session, err := v.authorize(ctx, sessionToken, req.OrgID, "vault:delete")
 	if err != nil {
-		return fmt.Errorf("session validation failed: %w", err)
-	}
-	if !HasScope(session, "vault:delete") {
-		return fmt.Errorf("insufficient scope: vault:delete required")
-	}
-	if session.OrgID != req.OrgID {
-		return fmt.Errorf("session org mismatch")
+		return err
 	}
 
 	if err := v.vaultStore.SoftDeleteVaultEntry(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID); err != nil {
-		return fmt.Errorf("failed to delete vault entry: %w", err)
+		return internalError("failed to delete vault entry", err)
 	}
 
 	_ = v.auditLogger.Log(ctx, req.OrgID, "vault_delete", session.MemberID,
@@ -299,24 +307,28 @@ type VaultDestroyRequest struct {
 
 // Destroy permanently deletes a vault entry (irrecoverable).
 func (v *VaultService) Destroy(ctx context.Context, sessionToken string, req *VaultDestroyRequest) (int, error) {
-	// Validate session — require admin role for destroy
-	session, err := v.sessionService.ValidateSessionFromToken(ctx, sessionToken)
-	if err != nil {
-		return 0, fmt.Errorf("session validation failed: %w", err)
+	if req == nil {
+		return 0, invalidArgument("request is required")
 	}
-	if !HasScope(session, "vault:delete") {
-		return 0, fmt.Errorf("insufficient scope: vault:delete required")
+	if err := validateVaultFields(req.OrgID, req.ScopeID, req.EntryType, req.Key, true); err != nil {
+		return 0, err
+	}
+	if req.Version < 0 {
+		return 0, invalidArgument("version must not be negative")
+	}
+
+	// Validate session — require admin role for destroy
+	session, err := v.authorize(ctx, sessionToken, req.OrgID, "vault:delete")
+	if err != nil {
+		return 0, err
 	}
 	if session.Role != "admin" && session.Role != "master" {
-		return 0, fmt.Errorf("admin role required for destroy operations")
-	}
-	if session.OrgID != req.OrgID {
-		return 0, fmt.Errorf("session org mismatch")
+		return 0, NewDomainError(ErrorPermissionDenied, "admin role required", nil)
 	}
 
 	count, err := v.vaultStore.DestroyVaultEntry(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID, req.Version)
 	if err != nil {
-		return 0, fmt.Errorf("failed to destroy vault entry: %w", err)
+		return 0, internalError("failed to destroy vault entry", err)
 	}
 
 	_ = v.auditLogger.Log(ctx, req.OrgID, "vault_destroy", session.MemberID,
@@ -340,21 +352,21 @@ type VaultListResponse struct {
 
 // List returns all active keys within a scope.
 func (v *VaultService) List(ctx context.Context, sessionToken string, req *VaultListRequest) (*VaultListResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := validateVaultFields(req.OrgID, req.ScopeID, req.EntryType, "", false); err != nil {
+		return nil, err
+	}
+
 	// Validate session
-	session, err := v.sessionService.ValidateSessionFromToken(ctx, sessionToken)
-	if err != nil {
-		return nil, fmt.Errorf("session validation failed: %w", err)
-	}
-	if !HasScope(session, "vault:read") {
-		return nil, fmt.Errorf("insufficient scope: vault:read required")
-	}
-	if session.OrgID != req.OrgID {
-		return nil, fmt.Errorf("session org mismatch")
+	if _, err := v.authorize(ctx, sessionToken, req.OrgID, "vault:read"); err != nil {
+		return nil, err
 	}
 
 	entries, err := v.vaultStore.ListVaultEntries(ctx, req.OrgID, req.ScopeID, req.EntryType, req.EnvTypeID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list vault entries: %w", err)
+		return nil, internalError("failed to list vault entries", err)
 	}
 
 	return &VaultListResponse{Entries: entries}, nil
@@ -386,21 +398,21 @@ type VaultVersionInfo struct {
 
 // History returns the version history of a vault entry.
 func (v *VaultService) History(ctx context.Context, sessionToken string, req *VaultHistoryRequest) (*VaultHistoryResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := validateVaultFields(req.OrgID, req.ScopeID, req.EntryType, req.Key, true); err != nil {
+		return nil, err
+	}
+
 	// Validate session
-	session, err := v.sessionService.ValidateSessionFromToken(ctx, sessionToken)
-	if err != nil {
-		return nil, fmt.Errorf("session validation failed: %w", err)
-	}
-	if !HasScope(session, "vault:read") {
-		return nil, fmt.Errorf("insufficient scope: vault:read required")
-	}
-	if session.OrgID != req.OrgID {
-		return nil, fmt.Errorf("session org mismatch")
+	if _, err := v.authorize(ctx, sessionToken, req.OrgID, "vault:read"); err != nil {
+		return nil, err
 	}
 
 	entries, err := v.vaultStore.GetVaultEntryHistory(ctx, req.OrgID, req.ScopeID, req.EntryType, req.Key, req.EnvTypeID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get vault history: %w", err)
+		return nil, internalError("failed to get vault history", err)
 	}
 
 	versions := make([]VaultVersionInfo, len(entries))
@@ -425,25 +437,25 @@ func (v *VaultService) History(ctx context.Context, sessionToken string, req *Va
 func (v *VaultService) getOrgCAPublicKey(ctx context.Context, orgID string) (*ecdsa.PublicKey, error) {
 	certRecord, err := v.vaultStore.GetOrgCA(ctx, orgID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get Org CA cert: %w", err)
+		return nil, internalError("failed to get Org CA certificate", err)
 	}
 	if certRecord == nil {
-		return nil, fmt.Errorf("Org CA not found for org %s", orgID)
+		return nil, NewDomainError(ErrorFailedPrecondition, "organization PKI is not initialized", nil)
 	}
 
 	block, _ := pem.Decode([]byte(certRecord.CertPEM))
 	if block == nil {
-		return nil, fmt.Errorf("invalid Org CA PEM")
+		return nil, internalError("invalid stored Org CA PEM", nil)
 	}
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse Org CA cert: %w", err)
+		return nil, internalError("failed to parse stored Org CA certificate", err)
 	}
 
 	pub, ok := cert.PublicKey.(*ecdsa.PublicKey)
 	if !ok {
-		return nil, fmt.Errorf("Org CA cert does not contain an ECDSA public key")
+		return nil, internalError("stored Org CA certificate has an unsupported public key", nil)
 	}
 
 	return pub, nil
@@ -454,7 +466,10 @@ func (v *VaultService) decryptEntry(ctx context.Context, session *ValidateSessio
 	// Layer 3: KMS unwrap
 	dek, err := v.dekManager.GetDEKByVersion(ctx, entry.OrgID, entry.ScopeID, entry.KeyVersionID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get DEK by version: %w", err)
+		if errors.Is(err, keys.ErrKeyVersionNotFound) || errors.Is(err, keys.ErrKeyVersionRequired) {
+			return nil, NewDomainError(ErrorFailedPrecondition, "vault entry key version is unavailable", err)
+		}
+		return nil, internalError("failed to get vault entry key version", err)
 	}
 	defer zeroize(dek)
 
@@ -465,7 +480,7 @@ func (v *VaultService) decryptEntry(ctx context.Context, session *ValidateSessio
 
 	eciesOutput, err := crypto.Decrypt(dek, entry.EncryptedValue, []byte(aad))
 	if err != nil {
-		return nil, fmt.Errorf("KMS decryption failed: %w", err)
+		return nil, internalError("KMS decryption failed", err)
 	}
 
 	resp := &VaultReadResponse{
@@ -485,7 +500,10 @@ func (v *VaultService) decryptEntry(ctx context.Context, session *ValidateSessio
 		// BYOK path: return ECIES blob + member wrap data for client-side decryption
 		ephPub, wrappedKey, err := v.orgCAWrapMgr.GetWrapData(ctx, entry.OrgID, session.MemberID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get member wrap data: %w", err)
+			if errors.Is(err, keys.ErrOrgCAWrapNotFound) || errors.Is(err, keys.ErrOrgCAWrapRevoked) {
+				return nil, NewDomainError(ErrorFailedPrecondition, "member key wrapping is not available", err)
+			}
+			return nil, internalError("failed to get member wrap data", err)
 		}
 
 		resp.EncryptedValue = eciesOutput
@@ -496,13 +514,13 @@ func (v *VaultService) decryptEntry(ctx context.Context, session *ValidateSessio
 		// The server needs the member's private key to unwrap the Org CA key
 		orgCAPrivKey, err := v.unwrapOrgCAForManagedMember(ctx, entry.OrgID, session.MemberID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to unwrap Org CA key: %w", err)
+			return nil, err
 		}
 
 		// ECIES decrypt
 		rsaBlob, err := crypto.ECIESDecrypt(orgCAPrivKey, eciesOutput, "envsync-ecies-v1", entry.OrgID, []byte(entry.OrgID))
 		if err != nil {
-			return nil, fmt.Errorf("ECIES decryption failed: %w", err)
+			return nil, internalError("ECIES decryption failed", err)
 		}
 
 		resp.EncryptedValue = rsaBlob // Layer 1 output for envsync-api to handle
@@ -522,35 +540,76 @@ func (v *VaultService) unwrapOrgCAForManagedMember(ctx context.Context, orgID, m
 	// Get the member's wrap record to find their cert serial
 	wrapRecord, err := v.vaultStore.GetOrgCAWrap(ctx, orgID, memberID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get Org CA wrap: %w", err)
+		return nil, internalError("failed to get Org CA wrap", err)
 	}
 	if wrapRecord == nil {
-		return nil, fmt.Errorf("no Org CA wrap found for member %s in org %s", memberID, orgID)
+		return nil, NewDomainError(ErrorFailedPrecondition, "member key wrapping is not available", nil)
 	}
 
 	// Load member's encrypted private key using the cert serial from the wrap
 	certRecord, err := v.vaultStore.GetCertificateBySerialWithKey(ctx, wrapRecord.CertSerial)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get member certificate: %w", err)
+		return nil, internalError("failed to get member certificate", err)
 	}
 	if certRecord == nil {
-		return nil, fmt.Errorf("member certificate not found: %s", wrapRecord.CertSerial)
+		return nil, NewDomainError(ErrorFailedPrecondition, "managed member key is not available", nil)
 	}
 	if len(certRecord.EncryptedPrivateKey) == 0 {
-		return nil, fmt.Errorf("member %s does not have a managed private key (BYOK member?)", memberID)
+		return nil, NewDomainError(ErrorFailedPrecondition, "managed member key is not available", nil)
 	}
 
 	// Deserialize the managed member's private key
 	memberPrivKey, err := crypto.UnmarshalECPrivateKey(certRecord.EncryptedPrivateKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal member private key: %w", err)
+		return nil, internalError("failed to decode managed member key", err)
 	}
 
 	// Unwrap the Org CA key using the member's private key via the manager
 	orgCAKey, err := v.orgCAWrapMgr.UnwrapOrgCA(ctx, orgID, memberID, memberPrivKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unwrap Org CA key: %w", err)
+		if errors.Is(err, keys.ErrOrgCAWrapNotFound) || errors.Is(err, keys.ErrOrgCAWrapRevoked) {
+			return nil, NewDomainError(ErrorFailedPrecondition, "member key wrapping is not available", err)
+		}
+		return nil, internalError("failed to unwrap Org CA key", err)
 	}
 
 	return orgCAKey, nil
+}
+
+func (v *VaultService) authorize(ctx context.Context, sessionToken, orgID, scope string) (*ValidateSessionResponse, error) {
+	session, err := v.sessionService.ValidateSessionFromToken(ctx, sessionToken)
+	if err != nil {
+		return nil, err
+	}
+	if !HasScope(session, scope) {
+		return nil, NewDomainError(ErrorPermissionDenied, scope+" permission required", nil)
+	}
+	if session.OrgID != orgID {
+		return nil, NewDomainError(ErrorPermissionDenied, "organization access denied", nil)
+	}
+	return session, nil
+}
+
+func validateVaultFields(orgID, scopeID, entryType, key string, keyRequired bool) error {
+	fields := []struct {
+		name  string
+		value string
+	}{
+		requiredField("org_id", orgID),
+		requiredField("scope_id", scopeID),
+		requiredField("entry_type", entryType),
+	}
+	if keyRequired {
+		fields = append(fields, requiredField("key", key))
+	}
+	if err := requireFields(fields...); err != nil {
+		return err
+	}
+
+	switch entryType {
+	case "env", "secret", "gpg":
+		return nil
+	default:
+		return invalidArgument("entry_type must be one of env, secret, or gpg")
+	}
 }

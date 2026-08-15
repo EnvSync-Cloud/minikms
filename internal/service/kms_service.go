@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -43,21 +44,31 @@ type EncryptResponse struct {
 
 // Encrypt encrypts plaintext using the scope's active DEK with AAD binding.
 func (s *KMSService) Encrypt(ctx context.Context, req *EncryptRequest) (*EncryptResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := requireFields(
+		requiredField("tenant_id", req.TenantID),
+		requiredField("scope_id", req.ScopeID),
+	); err != nil {
+		return nil, err
+	}
+
 	dek, keyVersionID, err := s.dekManager.GetOrCreateDEK(ctx, req.TenantID, req.ScopeID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get DEK: %w", err)
+		return nil, internalError("failed to get DEK", err)
 	}
 	defer zeroize(dek)
 
 	ciphertext, err := crypto.Encrypt(dek, req.Plaintext, []byte(req.AAD))
 	if err != nil {
-		return nil, fmt.Errorf("encryption failed: %w", err)
+		return nil, internalError("encryption failed", err)
 	}
 
 	// Increment encryption count and check for rotation
 	status, err := s.dekManager.IncrementAndCheckRotation(ctx, keyVersionID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to track encryption: %w", err)
+		return nil, internalError("failed to track encryption", err)
 	}
 
 	// Auto-rotate if needed
@@ -91,20 +102,32 @@ type DecryptResponse struct {
 
 // Decrypt decrypts ciphertext using the specified key version with AAD validation.
 func (s *KMSService) Decrypt(ctx context.Context, req *DecryptRequest) (*DecryptResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := requireFields(
+		requiredField("tenant_id", req.TenantID),
+		requiredField("scope_id", req.ScopeID),
+		requiredField("ciphertext", req.Ciphertext),
+		requiredField("key_version_id", req.KeyVersionID),
+	); err != nil {
+		return nil, err
+	}
+
 	ciphertext, err := base64.StdEncoding.DecodeString(req.Ciphertext)
 	if err != nil {
-		return nil, fmt.Errorf("invalid base64 ciphertext: %w", err)
+		return nil, NewDomainError(ErrorInvalidArgument, "ciphertext must be valid base64", err)
 	}
 
 	dek, err := s.dekManager.GetDEKByVersion(ctx, req.TenantID, req.ScopeID, req.KeyVersionID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get DEK by version: %w", err)
+		return nil, classifyKeyVersionError(err)
 	}
 	defer zeroize(dek)
 
 	plaintext, err := crypto.Decrypt(dek, ciphertext, []byte(req.AAD))
 	if err != nil {
-		return nil, fmt.Errorf("decryption failed: %w", err)
+		return nil, NewDomainError(ErrorInvalidArgument, "ciphertext could not be decrypted", err)
 	}
 
 	_ = s.auditLogger.Log(ctx, req.TenantID, "decrypt", "system",
@@ -133,9 +156,22 @@ type BatchEncryptResponse struct {
 
 // BatchEncrypt encrypts multiple items in a single call.
 func (s *KMSService) BatchEncrypt(ctx context.Context, req *BatchEncryptRequest) (*BatchEncryptResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := requireFields(
+		requiredField("tenant_id", req.TenantID),
+		requiredField("scope_id", req.ScopeID),
+	); err != nil {
+		return nil, err
+	}
+	if len(req.Items) == 0 {
+		return nil, invalidArgument("items must not be empty")
+	}
+
 	dek, keyVersionID, err := s.dekManager.GetOrCreateDEK(ctx, req.TenantID, req.ScopeID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get DEK: %w", err)
+		return nil, internalError("failed to get DEK", err)
 	}
 	defer zeroize(dek)
 
@@ -143,7 +179,7 @@ func (s *KMSService) BatchEncrypt(ctx context.Context, req *BatchEncryptRequest)
 	for i, item := range req.Items {
 		ciphertext, err := crypto.Encrypt(dek, item.Plaintext, []byte(item.AAD))
 		if err != nil {
-			return nil, fmt.Errorf("batch encrypt item %d failed: %w", i, err)
+			return nil, internalError(fmt.Sprintf("batch encrypt item %d failed", i), err)
 		}
 		results[i] = EncryptResponse{
 			Ciphertext:   base64.StdEncoding.EncodeToString(ciphertext),
@@ -168,6 +204,27 @@ type BatchDecryptResponse struct {
 
 // BatchDecrypt decrypts multiple items in a single call.
 func (s *KMSService) BatchDecrypt(ctx context.Context, req *BatchDecryptRequest) (*BatchDecryptResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := requireFields(
+		requiredField("tenant_id", req.TenantID),
+		requiredField("scope_id", req.ScopeID),
+	); err != nil {
+		return nil, err
+	}
+	if len(req.Items) == 0 {
+		return nil, invalidArgument("items must not be empty")
+	}
+	for i, item := range req.Items {
+		if item.Ciphertext == "" {
+			return nil, invalidArgument(fmt.Sprintf("items[%d].ciphertext is required", i))
+		}
+		if item.KeyVersionID == "" {
+			return nil, invalidArgument(fmt.Sprintf("items[%d].key_version_id is required", i))
+		}
+	}
+
 	deks := make(map[string][]byte)
 	defer func() {
 		for _, dek := range deks {
@@ -182,18 +239,20 @@ func (s *KMSService) BatchDecrypt(ctx context.Context, req *BatchDecryptRequest)
 			var err error
 			dek, err = s.dekManager.GetDEKByVersion(ctx, req.TenantID, req.ScopeID, item.KeyVersionID)
 			if err != nil {
-				return nil, fmt.Errorf("batch decrypt item %d: failed to get DEK by version: %w", i, err)
+				return nil, classifyKeyVersionError(err)
 			}
 			deks[item.KeyVersionID] = dek
 		}
 
 		ciphertext, err := base64.StdEncoding.DecodeString(item.Ciphertext)
 		if err != nil {
-			return nil, fmt.Errorf("batch decrypt item %d: invalid base64: %w", i, err)
+			return nil, NewDomainError(ErrorInvalidArgument,
+				fmt.Sprintf("items[%d].ciphertext must be valid base64", i), err)
 		}
 		plaintext, err := crypto.Decrypt(dek, ciphertext, []byte(item.AAD))
 		if err != nil {
-			return nil, fmt.Errorf("batch decrypt item %d failed: %w", i, err)
+			return nil, NewDomainError(ErrorInvalidArgument,
+				fmt.Sprintf("items[%d].ciphertext could not be decrypted", i), err)
 		}
 		results[i] = DecryptResponse{Plaintext: plaintext}
 	}
@@ -208,6 +267,17 @@ func (s *KMSService) BatchDecrypt(ctx context.Context, req *BatchDecryptRequest)
 			len(req.Items), req.ScopeID, strings.Join(keyVersionIDs, ",")), "")
 
 	return &BatchDecryptResponse{Items: results}, nil
+}
+
+func classifyKeyVersionError(err error) error {
+	switch {
+	case errors.Is(err, keys.ErrKeyVersionRequired):
+		return NewDomainError(ErrorInvalidArgument, "key_version_id is required", err)
+	case errors.Is(err, keys.ErrKeyVersionNotFound):
+		return NewDomainError(ErrorNotFound, "key version not found", err)
+	default:
+		return internalError("failed to get DEK by version", err)
+	}
 }
 
 func zeroize(b []byte) {
