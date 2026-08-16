@@ -147,9 +147,18 @@ Run the migration to create the required tables:
 
 ```bash
 psql $MINIKMS_DB_URL -f migrations/001_initial_schema.sql
+psql $MINIKMS_DB_URL -f migrations/002_vault_storage.sql
+psql $MINIKMS_DB_URL -f migrations/003_escrow_recovery.sql
 ```
 
-This creates: `key_versions`, `token_registry`, `certificates`, `crl_entries`, `kms_audit_log`, and `key_escrow_shares`.
+This creates the key, token, certificate, revocation, audit, vault, and versioned
+`key_escrow_sets` / `key_escrow_shares` storage used by miniKMS.
+
+For root and Org CA disaster recovery, enable the audited Shamir escrow flow and
+follow the [escrow recovery runbook](docs/escrow-recovery-runbook.md). The
+`minikms-escrow` admin CLI exports owner-only custodian packages, enforces the
+configured K-of-N threshold, and creates a fresh share generation after every
+successful recovery.
 
 ### Run Locally
 

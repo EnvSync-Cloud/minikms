@@ -10,6 +10,7 @@ import (
 	"github.com/envsync-cloud/minikms/internal/audit"
 	"github.com/envsync-cloud/minikms/internal/auth"
 	"github.com/envsync-cloud/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/escrow"
 	"github.com/envsync-cloud/minikms/internal/keys"
 	"github.com/envsync-cloud/minikms/internal/pkistore"
 	"github.com/envsync-cloud/minikms/internal/store"
@@ -196,6 +197,123 @@ func (m *MockAuditStore) VerifyChain(_ context.Context, orgID string) (bool, err
 	}
 	valid, _ := audit.VerifyChainIntegrity(reversed)
 	return valid, nil
+}
+
+// EntriesForOrg returns copies of the audit entries in chronological order.
+func (m *MockAuditStore) EntriesForOrg(orgID string) []*audit.AuditEntry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entries := m.entries[orgID]
+	result := make([]*audit.AuditEntry, len(entries))
+	for i, entry := range entries {
+		copyEntry := *entry
+		result[i] = &copyEntry
+	}
+	return result
+}
+
+// MockEscrowStore is an in-memory implementation of escrow.Store.
+type MockEscrowStore struct {
+	mu       sync.RWMutex
+	sets     map[string]*escrow.Set
+	shares   map[string][]*escrow.Share
+	activeID map[string]string
+}
+
+func NewMockEscrowStore() *MockEscrowStore {
+	return &MockEscrowStore{
+		sets:     make(map[string]*escrow.Set),
+		shares:   make(map[string][]*escrow.Share),
+		activeID: make(map[string]string),
+	}
+}
+
+func (m *MockEscrowStore) GetActiveEscrowSet(_ context.Context, orgID, keyType string) (*escrow.Set, []*escrow.Share, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	id := m.activeID[orgID+":"+keyType]
+	if id == "" {
+		return nil, nil, nil
+	}
+	return cloneEscrowSet(m.sets[id]), cloneEscrowShares(m.shares[id]), nil
+}
+
+func (m *MockEscrowStore) ReplaceEscrowSet(_ context.Context, set *escrow.Set, shares []*escrow.Share, recoveredSetID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := set.OrgID + ":" + set.KeyType
+	currentID := m.activeID[key]
+	if recoveredSetID != "" && currentID != recoveredSetID {
+		return fmt.Errorf("active recovered escrow set changed during recovery")
+	}
+	if currentID != "" {
+		current := m.sets[currentID]
+		current.Status = "retired"
+		if recoveredSetID != "" {
+			now := time.Now().UTC()
+			current.RecoveredAt = &now
+		}
+	}
+	setCopy := cloneEscrowSet(set)
+	m.sets[set.ID] = setCopy
+	m.shares[set.ID] = cloneEscrowShares(shares)
+	m.activeID[key] = set.ID
+	return nil
+}
+
+func (m *MockEscrowStore) MarkEscrowShareExported(_ context.Context, setID string, shareIndex int, exportedAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, share := range m.shares[setID] {
+		if share.ShareIndex == shareIndex {
+			timestamp := exportedAt
+			share.ExportedAt = &timestamp
+			return nil
+		}
+	}
+	return fmt.Errorf("escrow share not found")
+}
+
+// EscrowSetByID returns a copy of any generation for assertions.
+func (m *MockEscrowStore) EscrowSetByID(id string) *escrow.Set {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return cloneEscrowSet(m.sets[id])
+}
+
+// EscrowSharesBySet returns copies of a generation's encrypted shares.
+func (m *MockEscrowStore) EscrowSharesBySet(id string) []*escrow.Share {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return cloneEscrowShares(m.shares[id])
+}
+
+func cloneEscrowSet(set *escrow.Set) *escrow.Set {
+	if set == nil {
+		return nil
+	}
+	copySet := *set
+	copySet.SecretHash = append([]byte(nil), set.SecretHash...)
+	if set.RecoveredAt != nil {
+		timestamp := *set.RecoveredAt
+		copySet.RecoveredAt = &timestamp
+	}
+	return &copySet
+}
+
+func cloneEscrowShares(shares []*escrow.Share) []*escrow.Share {
+	result := make([]*escrow.Share, len(shares))
+	for i, share := range shares {
+		copyShare := *share
+		copyShare.EncryptedShare = append([]byte(nil), share.EncryptedShare...)
+		copyShare.ShareHash = append([]byte(nil), share.ShareHash...)
+		if share.ExportedAt != nil {
+			timestamp := *share.ExportedAt
+			copyShare.ExportedAt = &timestamp
+		}
+		result[i] = &copyShare
+	}
+	return result
 }
 
 // MockTokenRegistry is an in-memory implementation of auth.TokenRegistry for testing.

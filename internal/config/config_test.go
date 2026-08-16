@@ -48,6 +48,12 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.ShamirThreshold != 3 {
 		t.Errorf("ShamirThreshold = %d, want 3", cfg.ShamirThreshold)
 	}
+	if cfg.EscrowEnabled {
+		t.Error("EscrowEnabled = true, want false")
+	}
+	if cfg.EscrowCustodians != "custodian-1,custodian-2,custodian-3,custodian-4,custodian-5" {
+		t.Errorf("EscrowCustodians = %q", cfg.EscrowCustodians)
+	}
 }
 
 func TestLoad_CustomValues(t *testing.T) {
@@ -66,6 +72,9 @@ func TestLoad_CustomValues(t *testing.T) {
 	t.Setenv("MINIKMS_HKDF_SALT", "custom-salt")
 	t.Setenv("MINIKMS_SHAMIR_TOTAL_SHARES", "7")
 	t.Setenv("MINIKMS_SHAMIR_THRESHOLD", "4")
+	t.Setenv("MINIKMS_ESCROW_ENABLED", "true")
+	t.Setenv("MINIKMS_ESCROW_SEAL_KEY_FILE", "/run/secrets/escrow-seal-key")
+	t.Setenv("MINIKMS_ESCROW_CUSTODIANS", "alice,bob,carol,dave,erin,frank,grace")
 
 	cfg, err := Load()
 	if err != nil {
@@ -101,6 +110,9 @@ func TestLoad_CustomValues(t *testing.T) {
 	}
 	if cfg.ShamirThreshold != 4 {
 		t.Errorf("ShamirThreshold = %d, want 4", cfg.ShamirThreshold)
+	}
+	if !cfg.EscrowEnabled || cfg.EscrowSealKeyFile != "/run/secrets/escrow-seal-key" {
+		t.Errorf("unexpected escrow config: enabled=%t file=%q", cfg.EscrowEnabled, cfg.EscrowSealKeyFile)
 	}
 }
 

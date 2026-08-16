@@ -20,6 +20,8 @@ import (
 	"github.com/envsync-cloud/minikms/internal/audit"
 	"github.com/envsync-cloud/minikms/internal/auth"
 	"github.com/envsync-cloud/minikms/internal/config"
+	"github.com/envsync-cloud/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/escrow"
 	grpcadapter "github.com/envsync-cloud/minikms/internal/grpc"
 	"github.com/envsync-cloud/minikms/internal/keys"
 	"github.com/envsync-cloud/minikms/internal/pki"
@@ -39,7 +41,11 @@ func main() {
 
 	// Load root key — this is the ONLY place the root key is loaded (Issue #1)
 	rootKeyHolder := keys.GetRootKeyHolder()
-	if err := rootKeyHolder.Load(cfg.RootKey); err != nil {
+	rootKeyHex, err := keys.LoadRootKeyHex(cfg.RootKey, cfg.RootKeyFile)
+	if err != nil {
+		log.Fatalf("Failed to load root key source: %v", err)
+	}
+	if err := rootKeyHolder.Load(rootKeyHex); err != nil {
 		log.Fatalf("Failed to load root key: %v", err)
 	}
 	log.Println("Root key loaded successfully")
@@ -66,6 +72,39 @@ func main() {
 
 	// Initialize audit logger
 	auditLogger := audit.NewAuditLogger(pgStore)
+
+	// Split the root key immediately after unseal when escrow is enabled. The
+	// independent seal key protects stored shares without creating a dependency
+	// on the root key that those shares are intended to recover.
+	var escrowMgr *escrow.Manager
+	var escrowCustodians []string
+	if cfg.EscrowEnabled {
+		sealKey, err := escrow.LoadSealKey(cfg.EscrowSealKey, cfg.EscrowSealKeyFile)
+		if err != nil {
+			log.Fatalf("Failed to load escrow seal key: %v", err)
+		}
+		escrowMgr, err = escrow.NewManager(pgStore, auditLogger, sealKey)
+		crypto.ZeroizeBytes(sealKey)
+		if err != nil {
+			log.Fatalf("Failed to initialize escrow manager: %v", err)
+		}
+		escrowCustodians, err = escrow.ParseCustodians(cfg.EscrowCustodians, cfg.ShamirTotalShares)
+		if err != nil {
+			log.Fatalf("Invalid escrow custodian configuration: %v", err)
+		}
+
+		rootKey, err := rootKeyHolder.GetKey()
+		if err != nil {
+			log.Fatalf("Failed to access root key for escrow: %v", err)
+		}
+		rootSet, created, err := escrowMgr.EnsureSplit(ctx, escrow.RootScope, escrow.KeyTypeRoot,
+			rootKey, escrowCustodians, cfg.ShamirThreshold, "system")
+		crypto.ZeroizeBytes(rootKey)
+		if err != nil {
+			log.Fatalf("Failed to escrow root key: %v", err)
+		}
+		log.Printf("Root escrow ready (set: %s, newly created: %t)", rootSet.ID, created)
+	}
 
 	// Initialize rate limiter
 	_ = ratelimit.NewRateLimiter(redisStore.Client(), cfg.RateLimitPerSecond, cfg.RateLimitBurst)
@@ -95,6 +134,9 @@ func main() {
 	pkiSvc := service.NewPKIService(rootCert, rootKey, auditLogger, pgStore)
 	pkiSvc.SetOrgCAWrapManager(orgCAWrapMgr)
 	pkiSvc.SetShamirConfig(cfg.ShamirTotalShares, cfg.ShamirThreshold)
+	if escrowMgr != nil {
+		pkiSvc.SetEscrowManager(escrowMgr, escrowCustodians)
+	}
 
 	sessionSvc := service.NewSessionService(
 		sessionSigningKey,
