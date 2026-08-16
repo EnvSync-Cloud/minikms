@@ -14,7 +14,9 @@ import (
 	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
 	"github.com/envsync-cloud/minikms/internal/service"
 	"github.com/envsync-cloud/minikms/internal/testutil"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // --- extractSessionToken tests ---
@@ -69,6 +71,9 @@ func TestExtractSessionToken_MissingMetadata(t *testing.T) {
 	_, err := extractSessionToken(context.Background())
 	if err == nil {
 		t.Fatal("expected error for missing metadata")
+	}
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("code = %v, want %v", status.Code(err), codes.Unauthenticated)
 	}
 }
 
@@ -171,6 +176,41 @@ func TestKMSAdapter_EncryptDecrypt(t *testing.T) {
 	}
 	if string(decResp.Plaintext) != "hello world" {
 		t.Errorf("plaintext = %q, want %q", string(decResp.Plaintext), "hello world")
+	}
+}
+
+func TestKMSAdapter_ErrorCodes(t *testing.T) {
+	adapter := setupKMSAdapter(t)
+	ctx := context.Background()
+
+	tests := []struct {
+		name     string
+		request  *pb.DecryptRequest
+		wantCode codes.Code
+	}{
+		{
+			name: "validation",
+			request: &pb.DecryptRequest{
+				ScopeId: "app-1", Ciphertext: "not-base64", KeyVersionId: "key-1",
+			},
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name: "missing key version resource",
+			request: &pb.DecryptRequest{
+				TenantId: "org-1", ScopeId: "app-1", Ciphertext: "AA==", KeyVersionId: "missing",
+			},
+			wantCode: codes.NotFound,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := adapter.Decrypt(ctx, test.request)
+			if status.Code(err) != test.wantCode {
+				t.Fatalf("code = %v, want %v (error: %v)", status.Code(err), test.wantCode, err)
+			}
+		})
 	}
 }
 
@@ -392,6 +432,9 @@ func TestPKIAdapter_IssueMemberCert_NoOrgCA(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing org CA")
 	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("code = %v, want %v", status.Code(err), codes.FailedPrecondition)
+	}
 }
 
 func TestPKIAdapter_GetRootCA(t *testing.T) {
@@ -511,6 +554,9 @@ func TestSessionAdapter_RevokeSession_Invalid(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid token")
+	}
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("code = %v, want %v", status.Code(err), codes.Unauthenticated)
 	}
 }
 

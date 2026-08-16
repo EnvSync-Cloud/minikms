@@ -44,7 +44,7 @@ func (a *PKIAdapter) CreateOrgCA(ctx context.Context, req *pb.CreateOrgCARequest
 		OrgName: req.OrgName,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	a.mu.Lock()
@@ -62,8 +62,8 @@ func (a *PKIAdapter) IssueMemberCert(ctx context.Context, req *pb.IssueMemberCer
 	entry, ok := a.orgCAs[req.OrgId]
 	a.mu.RUnlock()
 	if !ok {
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"org CA for %q not found; call CreateOrgCA first", req.OrgId)
+		return nil, status.Error(codes.FailedPrecondition,
+			"organization CA is not initialized; call CreateOrgCA first")
 	}
 
 	resp, err := a.pkiSvc.IssueMemberCert(ctx, &service.IssueMemberCertRequest{
@@ -75,7 +75,7 @@ func (a *PKIAdapter) IssueMemberCert(ctx context.Context, req *pb.IssueMemberCer
 		OrgCAKey:    entry.key,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	// Create Org CA wrap for the new member so they can decrypt vault entries
@@ -94,7 +94,7 @@ func (a *PKIAdapter) IssueMemberCert(ctx context.Context, req *pb.IssueMemberCer
 func (a *PKIAdapter) GetRootCA(ctx context.Context, _ *pb.GetRootCARequest) (*pb.GetRootCAResponse, error) {
 	rootCert := a.pkiSvc.RootCert()
 	if rootCert == nil {
-		return nil, status.Error(codes.Internal, "root CA not initialized")
+		return nil, status.Error(codes.Internal, "internal server error")
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootCert.Raw})
 	return &pb.GetRootCAResponse{CertPem: string(certPEM)}, nil
@@ -106,7 +106,7 @@ func (a *PKIAdapter) RevokeCert(ctx context.Context, req *pb.RevokeCertRequest) 
 		OrgID:     req.OrgId,
 		Reason:    int(req.Reason),
 	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 	return &pb.RevokeCertResponse{Success: true}, nil
 }
@@ -116,8 +116,8 @@ func (a *PKIAdapter) GetCRL(ctx context.Context, req *pb.GetCRLRequest) (*pb.Get
 	entry, ok := a.orgCAs[req.OrgId]
 	a.mu.RUnlock()
 	if !ok {
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"org CA for %q not found; call CreateOrgCA first", req.OrgId)
+		return nil, status.Error(codes.FailedPrecondition,
+			"organization CA is not initialized; call CreateOrgCA first")
 	}
 
 	resp, err := a.pkiSvc.GetCRL(ctx, &service.GetCRLRequest{
@@ -127,7 +127,7 @@ func (a *PKIAdapter) GetCRL(ctx context.Context, req *pb.GetCRLRequest) (*pb.Get
 		IssuerKey:  entry.key,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	return &pb.GetCRLResponse{
@@ -143,7 +143,7 @@ func (a *PKIAdapter) CheckOCSP(ctx context.Context, req *pb.CheckOCSPRequest) (*
 		OrgID:     req.OrgId,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	return &pb.CheckOCSPResponse{

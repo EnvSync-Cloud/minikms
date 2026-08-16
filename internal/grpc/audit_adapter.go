@@ -6,8 +6,6 @@ import (
 
 	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
 	"github.com/envsync-cloud/minikms/internal/service"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // AuditAdapter bridges the proto AuditServiceServer interface to the internal
@@ -29,7 +27,7 @@ func (a *AuditAdapter) GetAuditLogs(ctx context.Context, req *pb.GetAuditLogsReq
 		Offset: int(req.Offset),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	entries := make([]*pb.AuditEntry, len(resp.Entries))
@@ -54,7 +52,7 @@ func (a *AuditAdapter) VerifyChain(ctx context.Context, req *pb.VerifyChainReque
 		OrgID: req.OrgId,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 	return &pb.VerifyChainResponse{Valid: resp.Valid}, nil
 }

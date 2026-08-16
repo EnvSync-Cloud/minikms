@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/envsync-cloud/minikms/internal/audit"
 )
@@ -32,9 +31,22 @@ type GetAuditLogsResponse struct {
 
 // GetAuditLogs returns audit log entries for an organization.
 func (s *AuditService) GetAuditLogs(ctx context.Context, req *GetAuditLogsRequest) (*GetAuditLogsResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := requireFields(requiredField("org_id", req.OrgID)); err != nil {
+		return nil, err
+	}
+	if req.Limit <= 0 || req.Limit > 1000 {
+		return nil, invalidArgument("limit must be between 1 and 1000")
+	}
+	if req.Offset < 0 {
+		return nil, invalidArgument("offset must not be negative")
+	}
+
 	entries, err := s.store.GetEntries(ctx, req.OrgID, req.Limit, req.Offset)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get audit logs: %w", err)
+		return nil, internalError("failed to get audit logs", err)
 	}
 	return &GetAuditLogsResponse{Entries: entries}, nil
 }
@@ -51,9 +63,16 @@ type VerifyChainResponse struct {
 
 // VerifyChain verifies the hash chain integrity for an organization.
 func (s *AuditService) VerifyChain(ctx context.Context, req *VerifyChainRequest) (*VerifyChainResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := requireFields(requiredField("org_id", req.OrgID)); err != nil {
+		return nil, err
+	}
+
 	valid, err := s.store.VerifyChain(ctx, req.OrgID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to verify chain: %w", err)
+		return nil, internalError("failed to verify audit chain", err)
 	}
 	return &VerifyChainResponse{Valid: valid}, nil
 }

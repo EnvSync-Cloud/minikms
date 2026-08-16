@@ -30,7 +30,7 @@ func (a *KMSAdapter) Encrypt(ctx context.Context, req *pb.EncryptRequest) (*pb.E
 		AAD:       req.Aad,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 	return &pb.EncryptResponse{
 		Ciphertext:   resp.Ciphertext,
@@ -47,7 +47,7 @@ func (a *KMSAdapter) Decrypt(ctx context.Context, req *pb.DecryptRequest) (*pb.D
 		KeyVersionID: req.KeyVersionId,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 	return &pb.DecryptResponse{Plaintext: resp.Plaintext}, nil
 }
@@ -66,7 +66,7 @@ func (a *KMSAdapter) BatchEncrypt(ctx context.Context, req *pb.BatchEncryptReque
 		Items:    items,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 	pbItems := make([]*pb.EncryptResponse, len(resp.Items))
 	for i, item := range resp.Items {
@@ -95,7 +95,7 @@ func (a *KMSAdapter) BatchDecrypt(ctx context.Context, req *pb.BatchDecryptReque
 		Items:    items,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 	pbItems := make([]*pb.DecryptResponse, len(resp.Items))
 	for i, item := range resp.Items {
@@ -110,7 +110,7 @@ func (a *KMSAdapter) CreateDataKey(ctx context.Context, req *pb.CreateDataKeyReq
 		ScopeID:  req.ScopeId,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 	return &pb.CreateDataKeyResponse{
 		KeyVersionId: resp.KeyVersionID,
@@ -124,7 +124,7 @@ func (a *KMSAdapter) RotateDataKey(ctx context.Context, req *pb.RotateDataKeyReq
 		ScopeID:  req.ScopeId,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 	return &pb.RotateDataKeyResponse{NewKeyVersionId: resp.NewKeyVersionID}, nil
 }
@@ -139,7 +139,7 @@ func (a *KMSAdapter) GetKeyInfo(ctx context.Context, req *pb.GetKeyInfoRequest) 
 		ScopeID:  req.ScopeId,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 	return &pb.GetKeyInfoResponse{
 		KeyVersionId:    resp.KeyVersionID,

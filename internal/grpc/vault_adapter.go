@@ -39,6 +39,9 @@ func extractSessionToken(ctx context.Context) (string, error) {
 	if len(token) > 7 && token[:7] == "Bearer " {
 		token = token[7:]
 	}
+	if token == "" {
+		return "", status.Error(codes.Unauthenticated, "invalid authorization header")
+	}
 	return token, nil
 }
 
@@ -63,7 +66,7 @@ func (a *VaultAdapter) Write(ctx context.Context, req *pb.VaultWriteRequest) (*p
 		CreatedBy: req.CreatedBy,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	return &pb.VaultWriteResponse{
@@ -93,7 +96,7 @@ func (a *VaultAdapter) Read(ctx context.Context, req *pb.VaultReadRequest) (*pb.
 		ClientSideDecrypt: req.ClientSideDecrypt,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	return vaultReadResponseToProto(resp), nil
@@ -120,7 +123,7 @@ func (a *VaultAdapter) ReadVersion(ctx context.Context, req *pb.VaultReadVersion
 		ClientSideDecrypt: req.ClientSideDecrypt,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	return vaultReadResponseToProto(resp), nil
@@ -145,7 +148,7 @@ func (a *VaultAdapter) Delete(ctx context.Context, req *pb.VaultDeleteRequest) (
 		EnvTypeID: envTypeID,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	return &pb.VaultDeleteResponse{Success: true}, nil
@@ -171,7 +174,7 @@ func (a *VaultAdapter) Destroy(ctx context.Context, req *pb.VaultDestroyRequest)
 		Version:   int(req.Version),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	return &pb.VaultDestroyResponse{
@@ -198,7 +201,7 @@ func (a *VaultAdapter) List(ctx context.Context, req *pb.VaultListRequest) (*pb.
 		EnvTypeID: envTypeID,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	entries := make([]*pb.VaultListEntry, len(resp.Entries))
@@ -233,7 +236,7 @@ func (a *VaultAdapter) History(ctx context.Context, req *pb.VaultHistoryRequest)
 		EnvTypeID: envTypeID,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "%v", err)
+		return nil, toStatusError(err)
 	}
 
 	versions := make([]*pb.VaultVersionEntry, len(resp.Versions))

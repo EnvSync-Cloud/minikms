@@ -74,13 +74,26 @@ type CreateOrgCAResponse struct {
 // parsed certificate and private key alongside the response. This is used by
 // the gRPC adapter to cache the org CA for subsequent IssueMemberCert calls.
 func (s *PKIService) CreateOrgCAFull(ctx context.Context, req *CreateOrgCARequest) (*CreateOrgCAResponse, *x509.Certificate, *ecdsa.PrivateKey, error) {
+	if req == nil {
+		return nil, nil, nil, invalidArgument("request is required")
+	}
+	if err := requireFields(
+		requiredField("org_id", req.OrgID),
+		requiredField("org_name", req.OrgName),
+	); err != nil {
+		return nil, nil, nil, err
+	}
+	if s.rootCert == nil || s.rootKey == nil {
+		return nil, nil, nil, NewDomainError(ErrorFailedPrecondition, "root CA is not initialized", nil)
+	}
+
 	cert, key, certDER, err := pki.CreateOrgIntermediateCA(
 		req.OrgID, req.OrgName,
 		s.rootCert, s.rootKey,
 		10*365*24*time.Hour, // 10 year validity
 	)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create org CA: %w", err)
+		return nil, nil, nil, internalError("failed to create org CA", err)
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
@@ -88,7 +101,7 @@ func (s *PKIService) CreateOrgCAFull(ctx context.Context, req *CreateOrgCAReques
 
 	// Persist to database
 	if s.store != nil {
-		_ = s.store.StoreCertificate(ctx, &pkistore.CertRecord{
+		if err := s.store.StoreCertificate(ctx, &pkistore.CertRecord{
 			SerialNumber: serialHex,
 			CertType:     "org_intermediate_ca",
 			OrgID:        req.OrgID,
@@ -97,7 +110,9 @@ func (s *PKIService) CreateOrgCAFull(ctx context.Context, req *CreateOrgCAReques
 			Status:       "active",
 			IssuedAt:     cert.NotBefore,
 			ExpiresAt:    cert.NotAfter,
-		})
+		}); err != nil {
+			return nil, nil, nil, internalError("failed to store org CA certificate", err)
+		}
 	}
 
 	_ = s.auditLogger.Log(ctx, req.OrgID, "org_ca_created", "system",
@@ -144,13 +159,28 @@ type CreateOrgWithWrappingResponse struct {
 // wraps the Org CA private key for the creator, and Shamir-escrows it.
 // This implements the zero-trust org creation flow from the plan.
 func (s *PKIService) CreateOrgWithWrapping(ctx context.Context, req *CreateOrgWithWrappingRequest) (*CreateOrgWithWrappingResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := requireFields(
+		requiredField("org_id", req.OrgID),
+		requiredField("org_name", req.OrgName),
+		requiredField("creator_member_id", req.CreatorMemberID),
+		requiredField("creator_role", req.CreatorRole),
+	); err != nil {
+		return nil, err
+	}
+	if len(req.CreatorCSR) == 0 && req.CreatorEmail == "" {
+		return nil, invalidArgument("creator_email is required for managed members")
+	}
+
 	// Step 1: Generate Org CA keypair (P-384), sign with Root CA
 	orgCAResp, orgCACert, orgCAKey, err := s.CreateOrgCAFull(ctx, &CreateOrgCARequest{
 		OrgID:   req.OrgID,
 		OrgName: req.OrgName,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create org CA: %w", err)
+		return nil, err
 	}
 
 	// Step 2: Issue creator's member cert
@@ -166,7 +196,7 @@ func (s *PKIService) CreateOrgWithWrapping(ctx context.Context, req *CreateOrgWi
 			365*24*time.Hour, nil,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("failed to issue member cert from CSR: %w", err)
+			return nil, NewDomainError(ErrorInvalidArgument, "creator_csr is invalid", err)
 		}
 
 		memberCertPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}))
@@ -175,7 +205,7 @@ func (s *PKIService) CreateOrgWithWrapping(ctx context.Context, req *CreateOrgWi
 
 		// Persist member cert
 		if s.store != nil {
-			_ = s.store.StoreCertificate(ctx, &pkistore.CertRecord{
+			if err := s.store.StoreCertificate(ctx, &pkistore.CertRecord{
 				SerialNumber: memberSerialHex,
 				CertType:     "member",
 				OrgID:        req.OrgID,
@@ -184,7 +214,9 @@ func (s *PKIService) CreateOrgWithWrapping(ctx context.Context, req *CreateOrgWi
 				Status:       "active",
 				IssuedAt:     memberCert.NotBefore,
 				ExpiresAt:    memberCert.NotAfter,
-			})
+			}); err != nil {
+				return nil, internalError("failed to store creator certificate", err)
+			}
 		}
 	} else {
 		// Managed mode: server generates key
@@ -197,7 +229,7 @@ func (s *PKIService) CreateOrgWithWrapping(ctx context.Context, req *CreateOrgWi
 			OrgCAKey:    orgCAKey,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to issue member cert: %w", err)
+			return nil, err
 		}
 
 		memberCertPEM = memberResp.CertPEM
@@ -207,7 +239,7 @@ func (s *PKIService) CreateOrgWithWrapping(ctx context.Context, req *CreateOrgWi
 		// Extract public key from the cert
 		pub, err := keys.ParseMemberCertPublicKey(memberCertPEM)
 		if err != nil {
-			return nil, fmt.Errorf("failed to extract member public key: %w", err)
+			return nil, internalError("failed to extract member public key", err)
 		}
 		memberPubKey = pub
 	}
@@ -218,7 +250,7 @@ func (s *PKIService) CreateOrgWithWrapping(ctx context.Context, req *CreateOrgWi
 			ctx, req.OrgID, req.CreatorMemberID, memberSerialHex,
 			memberPubKey, orgCAKey,
 		); err != nil {
-			return nil, fmt.Errorf("failed to wrap Org CA key: %w", err)
+			return nil, internalError("failed to wrap Org CA key", err)
 		}
 	}
 
@@ -269,29 +301,52 @@ type AddMemberResponse struct {
 
 // AddMember adds a new member to an org, issuing their cert and wrapping the Org CA key.
 func (s *PKIService) AddMember(ctx context.Context, req *AddMemberRequest) (*AddMemberResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := requireFields(
+		requiredField("org_id", req.OrgID),
+		requiredField("member_id", req.MemberID),
+		requiredField("role", req.Role),
+		requiredField("admin_member_id", req.AdminMemberID),
+	); err != nil {
+		return nil, err
+	}
+	if req.AdminPrivKey == nil {
+		return nil, invalidArgument("admin_private_key is required")
+	}
+	if len(req.MemberCSR) == 0 && req.MemberEmail == "" {
+		return nil, invalidArgument("member_email is required for managed members")
+	}
 	if s.orgCAWrapMgr == nil {
-		return nil, fmt.Errorf("Org CA wrap manager not configured")
+		return nil, NewDomainError(ErrorFailedPrecondition, "Org CA wrapping is not configured", nil)
+	}
+	if s.store == nil {
+		return nil, NewDomainError(ErrorFailedPrecondition, "certificate store is not configured", nil)
 	}
 
 	// Step 1: Admin proves they can unwrap Org CA key
 	orgCAPrivKey, err := s.orgCAWrapMgr.UnwrapOrgCA(ctx, req.OrgID, req.AdminMemberID, req.AdminPrivKey)
 	if err != nil {
-		return nil, fmt.Errorf("admin failed to unwrap Org CA key: %w", err)
+		return nil, NewDomainError(ErrorPermissionDenied, "admin key authorization failed", err)
 	}
 
 	// Load the Org CA cert
 	orgCACertRec, err := s.store.GetOrgCA(ctx, req.OrgID)
-	if err != nil || orgCACertRec == nil {
-		return nil, fmt.Errorf("failed to load Org CA cert: %w", err)
+	if err != nil {
+		return nil, internalError("failed to load Org CA certificate", err)
+	}
+	if orgCACertRec == nil {
+		return nil, NewDomainError(ErrorNotFound, "organization CA not found", nil)
 	}
 
 	block, _ := pem.Decode([]byte(orgCACertRec.CertPEM))
 	if block == nil {
-		return nil, fmt.Errorf("invalid Org CA PEM")
+		return nil, internalError("invalid stored Org CA PEM", nil)
 	}
 	orgCACert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse Org CA cert: %w", err)
+		return nil, internalError("failed to parse stored Org CA certificate", err)
 	}
 
 	// Step 2: Issue new member cert
@@ -307,7 +362,7 @@ func (s *PKIService) AddMember(ctx context.Context, req *AddMemberRequest) (*Add
 			365*24*time.Hour, nil,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("failed to issue member cert from CSR: %w", err)
+			return nil, NewDomainError(ErrorInvalidArgument, "member_csr is invalid", err)
 		}
 
 		memberCertPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}))
@@ -315,7 +370,7 @@ func (s *PKIService) AddMember(ctx context.Context, req *AddMemberRequest) (*Add
 		memberPubKey = memberCert.PublicKey.(*ecdsa.PublicKey)
 
 		if s.store != nil {
-			_ = s.store.StoreCertificate(ctx, &pkistore.CertRecord{
+			if err := s.store.StoreCertificate(ctx, &pkistore.CertRecord{
 				SerialNumber: memberSerialHex,
 				CertType:     "member",
 				OrgID:        req.OrgID,
@@ -324,7 +379,9 @@ func (s *PKIService) AddMember(ctx context.Context, req *AddMemberRequest) (*Add
 				Status:       "active",
 				IssuedAt:     memberCert.NotBefore,
 				ExpiresAt:    memberCert.NotAfter,
-			})
+			}); err != nil {
+				return nil, internalError("failed to store member certificate", err)
+			}
 		}
 	} else {
 		// Managed mode
@@ -337,7 +394,7 @@ func (s *PKIService) AddMember(ctx context.Context, req *AddMemberRequest) (*Add
 			OrgCAKey:    orgCAPrivKey,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to issue member cert: %w", err)
+			return nil, err
 		}
 
 		memberCertPEM = memberResp.CertPEM
@@ -346,7 +403,7 @@ func (s *PKIService) AddMember(ctx context.Context, req *AddMemberRequest) (*Add
 
 		pub, err := keys.ParseMemberCertPublicKey(memberCertPEM)
 		if err != nil {
-			return nil, fmt.Errorf("failed to extract member public key: %w", err)
+			return nil, internalError("failed to extract member public key", err)
 		}
 		memberPubKey = pub
 	}
@@ -356,7 +413,7 @@ func (s *PKIService) AddMember(ctx context.Context, req *AddMemberRequest) (*Add
 		ctx, req.OrgID, req.MemberID, memberSerialHex,
 		memberPubKey, orgCAPrivKey,
 	); err != nil {
-		return nil, fmt.Errorf("failed to wrap Org CA key for new member: %w", err)
+		return nil, internalError("failed to wrap Org CA key for new member", err)
 	}
 
 	// Step 4: Zeroize Org CA private key
@@ -391,6 +448,21 @@ type IssueMemberCertResponse struct {
 
 // IssueMemberCert creates a member end-entity certificate.
 func (s *PKIService) IssueMemberCert(ctx context.Context, req *IssueMemberCertRequest) (*IssueMemberCertResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := requireFields(
+		requiredField("member_id", req.MemberID),
+		requiredField("member_email", req.MemberEmail),
+		requiredField("org_id", req.OrgID),
+		requiredField("role", req.Role),
+	); err != nil {
+		return nil, err
+	}
+	if req.OrgCACert == nil || req.OrgCAKey == nil {
+		return nil, NewDomainError(ErrorFailedPrecondition, "organization CA is not available", nil)
+	}
+
 	_, memberKey, certDER, err := pki.CreateMemberCertificate(
 		req.MemberID, req.MemberEmail, req.OrgID, req.Role,
 		req.OrgCACert, req.OrgCAKey,
@@ -398,14 +470,14 @@ func (s *PKIService) IssueMemberCert(ctx context.Context, req *IssueMemberCertRe
 		nil,              // CRL distribution points
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to issue member cert: %w", err)
+		return nil, internalError("failed to issue member certificate", err)
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 
 	keyDER, err := x509.MarshalECPrivateKey(memberKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal member key: %w", err)
+		return nil, internalError("failed to marshal member key", err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 
@@ -414,7 +486,7 @@ func (s *PKIService) IssueMemberCert(ctx context.Context, req *IssueMemberCertRe
 
 	// Persist to database (include private key for managed members)
 	if s.store != nil {
-		_ = s.store.StoreCertificateWithKey(ctx, &pkistore.CertRecord{
+		if err := s.store.StoreCertificateWithKey(ctx, &pkistore.CertRecord{
 			SerialNumber:        serialHex,
 			CertType:            "member",
 			OrgID:               req.OrgID,
@@ -424,7 +496,9 @@ func (s *PKIService) IssueMemberCert(ctx context.Context, req *IssueMemberCertRe
 			Status:              "active",
 			IssuedAt:            cert.NotBefore,
 			ExpiresAt:           cert.NotAfter,
-		})
+		}); err != nil {
+			return nil, internalError("failed to store member certificate", err)
+		}
 	}
 
 	_ = s.auditLogger.Log(ctx, req.OrgID, "member_cert_issued", req.MemberID,
@@ -448,38 +522,53 @@ type RevokeCertRequest struct {
 
 // RevokeCert marks a certificate as revoked and creates a CRL entry.
 func (s *PKIService) RevokeCert(ctx context.Context, req *RevokeCertRequest) error {
+	if req == nil {
+		return invalidArgument("request is required")
+	}
+	if err := requireFields(
+		requiredField("serial_hex", req.SerialHex),
+		requiredField("org_id", req.OrgID),
+	); err != nil {
+		return err
+	}
+	if !validSerialHex(req.SerialHex) {
+		return invalidArgument("serial_hex must be hexadecimal")
+	}
+	if req.Reason < 0 || req.Reason > 10 {
+		return invalidArgument("reason must be between 0 and 10")
+	}
 	if s.store == nil {
-		return fmt.Errorf("certificate store not configured")
+		return NewDomainError(ErrorFailedPrecondition, "certificate store is not configured", nil)
 	}
 
 	// Verify the cert exists and belongs to this org
 	cert, err := s.store.GetCertificateBySerial(ctx, req.SerialHex)
 	if err != nil {
-		return fmt.Errorf("failed to look up certificate: %w", err)
+		return internalError("failed to look up certificate", err)
 	}
 	if cert == nil {
-		return fmt.Errorf("certificate %s not found", req.SerialHex)
+		return NewDomainError(ErrorNotFound, "certificate not found", nil)
 	}
 	if cert.OrgID != req.OrgID {
-		return fmt.Errorf("certificate %s does not belong to org %s", req.SerialHex, req.OrgID)
+		return NewDomainError(ErrorPermissionDenied, "certificate organization access denied", nil)
 	}
 	if cert.Status == "revoked" {
-		return fmt.Errorf("certificate %s is already revoked", req.SerialHex)
+		return NewDomainError(ErrorFailedPrecondition, "certificate is already revoked", nil)
 	}
 
 	// Find the org CA (issuer)
 	orgCA, err := s.store.GetOrgCA(ctx, req.OrgID)
 	if err != nil {
-		return fmt.Errorf("failed to look up org CA: %w", err)
+		return internalError("failed to look up organization CA", err)
 	}
 	if orgCA == nil {
-		return fmt.Errorf("org CA not found for org %s", req.OrgID)
+		return NewDomainError(ErrorFailedPrecondition, "organization CA is not available", nil)
 	}
 
 	// Get next CRL number
 	crlNumber, err := s.store.GetNextCRLNumber(ctx, orgCA.SerialNumber)
 	if err != nil {
-		return fmt.Errorf("failed to get CRL number: %w", err)
+		return internalError("failed to get CRL number", err)
 	}
 
 	now := time.Now().UTC()
@@ -493,12 +582,12 @@ func (s *PKIService) RevokeCert(ctx context.Context, req *RevokeCertRequest) err
 		CRLNumber:    crlNumber,
 		IsDelta:      false,
 	}); err != nil {
-		return fmt.Errorf("failed to insert CRL entry: %w", err)
+		return internalError("failed to insert CRL entry", err)
 	}
 
 	// Update certificate status
 	if err := s.store.UpdateCertificateStatus(ctx, req.SerialHex, "revoked"); err != nil {
-		return fmt.Errorf("failed to update certificate status: %w", err)
+		return internalError("failed to update certificate status", err)
 	}
 
 	_ = s.auditLogger.Log(ctx, req.OrgID, "cert_revoked", "system",
@@ -524,23 +613,32 @@ type GetCRLResponse struct {
 
 // GetCRL generates a Certificate Revocation List for the given org.
 func (s *PKIService) GetCRL(ctx context.Context, req *GetCRLRequest) (*GetCRLResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := requireFields(requiredField("org_id", req.OrgID)); err != nil {
+		return nil, err
+	}
+	if req.IssuerCert == nil || req.IssuerKey == nil {
+		return nil, NewDomainError(ErrorFailedPrecondition, "organization CA signing key is not available", nil)
+	}
 	if s.store == nil {
-		return nil, fmt.Errorf("certificate store not configured")
+		return nil, NewDomainError(ErrorFailedPrecondition, "certificate store is not configured", nil)
 	}
 
 	// Find the org CA
 	orgCA, err := s.store.GetOrgCA(ctx, req.OrgID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to look up org CA: %w", err)
+		return nil, internalError("failed to look up organization CA", err)
 	}
 	if orgCA == nil {
-		return nil, fmt.Errorf("org CA not found for org %s", req.OrgID)
+		return nil, NewDomainError(ErrorNotFound, "organization CA not found", nil)
 	}
 
 	// Get all CRL entries for this issuer
 	entries, err := s.store.GetCRLEntries(ctx, orgCA.SerialNumber)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get CRL entries: %w", err)
+		return nil, internalError("failed to get CRL entries", err)
 	}
 
 	// Convert to pki.RevokedCert
@@ -558,7 +656,7 @@ func (s *PKIService) GetCRL(ctx context.Context, req *GetCRLRequest) (*GetCRLRes
 	// Get CRL number
 	crlNumber, err := s.store.GetNextCRLNumber(ctx, orgCA.SerialNumber)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get CRL number: %w", err)
+		return nil, internalError("failed to get CRL number", err)
 	}
 
 	now := time.Now().UTC()
@@ -571,7 +669,7 @@ func (s *PKIService) GetCRL(ctx context.Context, req *GetCRLRequest) (*GetCRLRes
 
 	crlDER, err := pki.GenerateCRL(req.IssuerCert, req.IssuerKey, revokedCerts, config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate CRL: %w", err)
+		return nil, internalError("failed to generate CRL", err)
 	}
 
 	return &GetCRLResponse{
@@ -595,14 +693,23 @@ type CheckOCSPResponse struct {
 
 // CheckOCSP checks the revocation status of a certificate.
 func (s *PKIService) CheckOCSP(ctx context.Context, req *CheckOCSPRequest) (*CheckOCSPResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := requireFields(
+		requiredField("serial_hex", req.SerialHex),
+		requiredField("org_id", req.OrgID),
+	); err != nil {
+		return nil, err
+	}
 	if s.store == nil {
-		return nil, fmt.Errorf("certificate store not configured")
+		return nil, NewDomainError(ErrorFailedPrecondition, "certificate store is not configured", nil)
 	}
 
 	// Verify the cert exists
 	cert, err := s.store.GetCertificateBySerial(ctx, req.SerialHex)
 	if err != nil {
-		return nil, fmt.Errorf("failed to look up certificate: %w", err)
+		return nil, internalError("failed to look up certificate", err)
 	}
 	if cert == nil || cert.OrgID != req.OrgID {
 		return &CheckOCSPResponse{Status: 2, RevokedAt: ""}, nil // unknown
@@ -611,7 +718,7 @@ func (s *PKIService) CheckOCSP(ctx context.Context, req *CheckOCSPRequest) (*Che
 	// Check for revocation entry
 	entry, err := s.store.GetCertRevocationEntry(ctx, req.SerialHex)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check revocation: %w", err)
+		return nil, internalError("failed to check revocation", err)
 	}
 	if entry != nil {
 		return &CheckOCSPResponse{
@@ -621,4 +728,9 @@ func (s *PKIService) CheckOCSP(ctx context.Context, req *CheckOCSPRequest) (*Che
 	}
 
 	return &CheckOCSPResponse{Status: 0, RevokedAt: ""}, nil // good
+}
+
+func validSerialHex(serial string) bool {
+	value, ok := new(big.Int).SetString(serial, 16)
+	return ok && value.Sign() >= 0
 }
