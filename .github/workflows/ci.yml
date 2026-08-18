@@ -107,7 +107,7 @@ jobs:
         run: go test ./internal/store/... ./internal/service/... -tags=e2e -v -race -count=1
 
   docker-e2e:
-    name: Docker E2E
+    name: Two-replica Docker E2E
     runs-on: ubuntu-latest
     needs: build
     steps:
@@ -115,24 +115,5 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-      - name: Start services
-        run: docker compose -f docker-compose.test.yaml up -d --build --wait
-      - name: Wait for minikms
-        run: |
-          for i in $(seq 1 30); do
-            if nc -z localhost 50051 2>/dev/null; then
-              echo "minikms is ready"
-              break
-            fi
-            if [ "$i" -eq 30 ]; then
-              echo "minikms did not become ready"
-              docker compose -f docker-compose.test.yaml logs minikms
-              exit 1
-            fi
-            sleep 1
-          done
-      - name: Run gRPC client example
-        run: go run ./examples/grpc-e2e/
-      - name: Cleanup
-        if: always()
-        run: docker compose -f docker-compose.test.yaml down -v --remove-orphans
+      - name: Run two-replica flows
+        run: ./scripts/docker-e2e-test.sh
