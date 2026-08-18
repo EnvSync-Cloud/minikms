@@ -1,3 +1,52 @@
+x-minikms-environment: &minikms-environment
+  MINIKMS_DB_URL: "postgres://minikms_test:testpass@postgres-test:5432/minikms_test?sslmode=disable"
+  MINIKMS_REDIS_URL: "redis://redis-test:6379/0"
+  MINIKMS_ROOT_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+  MINIKMS_ROOT_CA_CERT: |
+    -----BEGIN CERTIFICATE-----
+    MIICFzCCAZ2gAwIBAgIUcabYy7E5QKquJr/osP7wBxVxEVswCgYIKoZIzj0EAwMw
+    OTEgMB4GA1UEAwwXbWluaUtNUyBIQSBUZXN0IFJvb3QgQ0ExFTATBgNVBAoMDEVu
+    dlN5bmMgVGVzdDAeFw0yNjA4MTgxODUyMzBaFw0zNjA4MTUxODUyMzBaMDkxIDAe
+    BgNVBAMMF21pbmlLTVMgSEEgVGVzdCBSb290IENBMRUwEwYDVQQKDAxFbnZTeW5j
+    IFRlc3QwdjAQBgcqhkjOPQIBBgUrgQQAIgNiAARzwkCUZn+p1crrgBtViB/3O2Ku
+    QRI7HA9LIeC9L1OJpM4XlG4D5VCzdycK9C/ifbVuK6dZgIAaPJOWg7qh9p0DL+oR
+    BHR530BO46mxusRXyJcLzwkPzfBbIrN5f9JplZOjZjBkMB0GA1UdDgQWBBR2f5l7
+    1jpei0SI+z+BXsqUyb13DjAfBgNVHSMEGDAWgBR2f5l71jpei0SI+z+BXsqUyb13
+    DjASBgNVHRMBAf8ECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAKBggqhkjOPQQD
+    AwNoADBlAjAFUrVatcasvwe/yyWjxkw380Nc/ZVVKGlfFIGsiGhSiZQCB3ShuCUN
+    SOzsTvIoVYICMQDgaGZnMchTteLN6B5GHKbMYpqMu2s7FGKkBWGXoHYr+feY7l0w
+    3mMLSbi77ITL3fg=
+    -----END CERTIFICATE-----
+  MINIKMS_ROOT_CA_KEY: |
+    -----BEGIN EC PRIVATE KEY-----
+    MIGkAgEBBDD2QSdIyLtiSF6q4pu5LG6R9UDf4j/5bOrll+GTHaW0GoDStKB29HI3
+    eCZQHkFXaYagBwYFK4EEACKhZANiAARzwkCUZn+p1crrgBtViB/3O2KuQRI7HA9L
+    IeC9L1OJpM4XlG4D5VCzdycK9C/ifbVuK6dZgIAaPJOWg7qh9p0DL+oRBHR530BO
+    46mxusRXyJcLzwkPzfBbIrN5f9JplZM=
+    -----END EC PRIVATE KEY-----
+  MINIKMS_SESSION_SIGNING_KEY: |
+    -----BEGIN PRIVATE KEY-----
+    MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgQCuug1aHmh79pIP8
+    tMtr/8RmJijki0c2oaZanS+x1yWhRANCAATubzhTKHCYNUMOd4x/Sxsv1AbCjPPR
+    +/uwOj2OXWah8oXg2U/DTXbgnt46cEas1yz4UcZvs0oFLTxi+visoABA
+    -----END PRIVATE KEY-----
+  MINIKMS_GRPC_ADDR: "0.0.0.0:50051"
+
+x-minikms-service: &minikms-service
+  build: .
+  depends_on:
+    postgres-test:
+      condition: service_healthy
+    redis-test:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+  healthcheck:
+    test: ["CMD", "nc", "-z", "localhost", "50051"]
+    interval: 3s
+    timeout: 5s
+    retries: 10
+
 services:
   postgres-test:
     image: postgres:15-alpine
@@ -42,32 +91,17 @@ services:
       - |
         psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/001_initial_schema.sql &&
         psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/002_vault_storage.sql &&
-        psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/003_escrow_recovery.sql
+        psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/003_escrow_recovery.sql &&
+        psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/004_multi_replica_ha.sql
 
-  minikms:
-    build: .
-    depends_on:
-      postgres-test:
-        condition: service_healthy
-      redis-test:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    environment:
-      MINIKMS_DB_URL: "postgres://minikms_test:testpass@postgres-test:5432/minikms_test?sslmode=disable"
-      MINIKMS_REDIS_URL: "redis://redis-test:6379/0"
-      MINIKMS_ROOT_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
-      MINIKMS_SESSION_SIGNING_KEY: |
-        -----BEGIN PRIVATE KEY-----
-        MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgQCuug1aHmh79pIP8
-        tMtr/8RmJijki0c2oaZanS+x1yWhRANCAATubzhTKHCYNUMOd4x/Sxsv1AbCjPPR
-        +/uwOj2OXWah8oXg2U/DTXbgnt46cEas1yz4UcZvs0oFLTxi+visoABA
-        -----END PRIVATE KEY-----
-      MINIKMS_GRPC_ADDR: "0.0.0.0:50051"
+  minikms-1:
+    <<: *minikms-service
+    environment: *minikms-environment
     ports:
       - "50051:50051"
-    healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "50051"]
-      interval: 3s
-      timeout: 5s
-      retries: 10
+
+  minikms-2:
+    <<: *minikms-service
+    environment: *minikms-environment
+    ports:
+      - "50052:50051"

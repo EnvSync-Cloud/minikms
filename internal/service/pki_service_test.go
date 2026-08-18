@@ -31,6 +31,15 @@ func setupPKIService(t *testing.T) *PKIService {
 	return NewPKIService(rootCert, rootKey, auditLogger, nil)
 }
 
+func testOrgKeyManager(t *testing.T) *keys.OrgKeyManager {
+	t.Helper()
+	holder := keys.NewRootKeyHolder()
+	if err := holder.Load(testutil.TestRootKeyHex); err != nil {
+		t.Fatalf("load test root key: %v", err)
+	}
+	return keys.NewOrgKeyManager(holder)
+}
+
 func TestPKIService_CreateOrgCA(t *testing.T) {
 	ctx := context.Background()
 	svc := setupPKIService(t)
@@ -80,6 +89,7 @@ func TestPKIService_OrgBootstrapEscrowRecovery(t *testing.T) {
 	custodians := []string{"alice", "bob", "carol", "dave", "erin"}
 
 	svc := NewPKIService(rootCert, rootKey, auditLogger, testutil.NewMockPKICertStore())
+	svc.SetOrgKeyManager(testOrgKeyManager(t))
 	svc.SetShamirConfig(5, 3)
 	svc.SetEscrowManager(escrowManager, custodians)
 	_, _, orgCAKey, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{OrgID: "org-escrow", OrgName: "Escrow Org"})
@@ -243,6 +253,7 @@ func setupPKIWithStore(t *testing.T) (*PKIService, *x509.Certificate, *ecdsa.Pri
 	auditLogger := audit.NewAuditLogger(auditStore)
 	certStore := testutil.NewMockPKICertStore()
 	svc := NewPKIService(rootCert, rootKey, auditLogger, certStore)
+	svc.SetOrgKeyManager(testOrgKeyManager(t))
 	return svc, rootCert, rootKey, certStore
 }
 
@@ -693,6 +704,12 @@ func TestCreateOrgCAFull_Stored(t *testing.T) {
 	if rec.CertType != "org_intermediate_ca" {
 		t.Errorf("CertType = %q, want %q", rec.CertType, "org_intermediate_ca")
 	}
+	if len(rec.EncryptedPrivateKey) == 0 {
+		t.Fatal("org CA private key should be stored encrypted for replica recovery")
+	}
+	if bytes.Equal(rec.EncryptedPrivateKey, crypto.MarshalECPrivateKey(key)) {
+		t.Fatal("org CA private key was stored as plaintext")
+	}
 
 	// Verify stored cert is the same as the one stored via serial
 	recBySerial, _ := certStore.GetCertificateBySerial(ctx, resp.SerialHex)
@@ -700,4 +717,31 @@ func TestCreateOrgCAFull_Stored(t *testing.T) {
 		t.Fatal("org CA cert should be stored by serial")
 	}
 	_ = pkistore.CertRecord{} // verify import is used
+}
+
+func TestCreateOrgCAFull_SharedAcrossReplicas(t *testing.T) {
+	ctx := context.Background()
+	first, rootCert, rootKey, certStore := setupPKIWithStore(t)
+
+	created, _, createdKey, err := first.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: "org-ha", OrgName: "HA Organization",
+	})
+	if err != nil {
+		t.Fatalf("first CreateOrgCAFull: %v", err)
+	}
+
+	second := NewPKIService(rootCert, rootKey, audit.NewAuditLogger(testutil.NewMockAuditStore()), certStore)
+	second.SetOrgKeyManager(testOrgKeyManager(t))
+	loaded, loadedCert, loadedKey, err := second.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: "org-ha", OrgName: "HA Organization",
+	})
+	if err != nil {
+		t.Fatalf("second CreateOrgCAFull: %v", err)
+	}
+	if loaded.SerialHex != created.SerialHex {
+		t.Fatalf("replica created a different Org CA: got %s want %s", loaded.SerialHex, created.SerialHex)
+	}
+	if loadedCert.SerialNumber.Text(16) != created.SerialHex || loadedKey.D.Cmp(createdKey.D) != 0 {
+		t.Fatal("replica did not load the shared Org CA certificate and key")
+	}
 }

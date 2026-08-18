@@ -117,7 +117,12 @@ All configuration is via environment variables:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MINIKMS_ROOT_KEY` | Yes | — | 256-bit hex-encoded root encryption key |
+| `MINIKMS_ROOT_KEY` | Conditional | — | 256-bit hex-encoded root encryption key |
+| `MINIKMS_ROOT_KEY_FILE` | Conditional | — | Path to a mounted 256-bit hex-encoded root key; recommended for production |
+| `MINIKMS_ROOT_CA_CERT` | Conditional | — | Shared Root CA certificate PEM |
+| `MINIKMS_ROOT_CA_CERT_FILE` | Conditional | — | Path to the shared Root CA certificate PEM; recommended for production |
+| `MINIKMS_ROOT_CA_KEY` | Conditional | — | Shared P-384 Root CA private key PEM |
+| `MINIKMS_ROOT_CA_KEY_FILE` | Conditional | — | Path to the shared P-384 Root CA private key PEM; recommended for production |
 | `MINIKMS_SESSION_SIGNING_KEY` | Conditional | — | P-256 private key in PKCS#8 or SEC1 PEM format |
 | `MINIKMS_SESSION_SIGNING_KEY_FILE` | Conditional | — | Path to a mounted P-256 PEM private key; recommended for production |
 | `MINIKMS_DB_URL` | Yes | — | PostgreSQL connection string |
@@ -132,6 +137,10 @@ Exactly one of `MINIKMS_SESSION_SIGNING_KEY` and
 `MINIKMS_SESSION_SIGNING_KEY_FILE` must be configured. All miniKMS replicas must
 use the same key so that sessions remain valid across restarts and can be
 verified by every replica.
+
+Exactly one value or file source must also be configured for the root encryption
+key, Root CA certificate, and Root CA private key. Every replica must receive
+the same material. See the [Kubernetes HA deployment guide](docs/kubernetes-ha-deployment.md).
 
 ## Deployment
 
@@ -149,6 +158,7 @@ Run the migration to create the required tables:
 psql $MINIKMS_DB_URL -f migrations/001_initial_schema.sql
 psql $MINIKMS_DB_URL -f migrations/002_vault_storage.sql
 psql $MINIKMS_DB_URL -f migrations/003_escrow_recovery.sql
+psql $MINIKMS_DB_URL -f migrations/004_multi_replica_ha.sql
 ```
 
 This creates the key, token, certificate, revocation, audit, vault, and versioned
@@ -165,6 +175,15 @@ successful recovery.
 ```bash
 # Set required env vars
 export MINIKMS_ROOT_KEY="$(openssl rand -hex 32)"
+openssl ecparam -name secp384r1 -genkey -noout -out ./root-ca-key.pem
+openssl req -new -x509 -key ./root-ca-key.pem -sha384 -days 3650 \
+  -subj "/CN=miniKMS Root CA/O=EnvSync" \
+  -addext "basicConstraints=critical,CA:TRUE,pathlen:1" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -out ./root-ca-cert.pem
+chmod 600 ./root-ca-key.pem
+export MINIKMS_ROOT_CA_CERT_FILE="./root-ca-cert.pem"
+export MINIKMS_ROOT_CA_KEY_FILE="./root-ca-key.pem"
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ./session-signing-key.pem
 chmod 600 ./session-signing-key.pem
 export MINIKMS_SESSION_SIGNING_KEY_FILE="./session-signing-key.pem"

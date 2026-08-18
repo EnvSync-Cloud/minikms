@@ -1,14 +1,79 @@
 package pki
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
+	"fmt"
 	"math/big"
 	"time"
 )
+
+// LoadRootCA validates a shared root CA certificate and private key. Every
+// replica must receive the same pair from a durable secret source.
+func LoadRootCA(certPEM, keyPEM []byte) (*x509.Certificate, *ecdsa.PrivateKey, error) {
+	certBlock, certRest := pem.Decode(certPEM)
+	if certBlock == nil || certBlock.Type != "CERTIFICATE" {
+		return nil, nil, fmt.Errorf("root CA certificate must be PEM encoded")
+	}
+	if len(bytes.TrimSpace(certRest)) != 0 {
+		return nil, nil, fmt.Errorf("root CA certificate PEM contains trailing data")
+	}
+
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse root CA certificate: %w", err)
+	}
+	if !cert.IsCA || !cert.BasicConstraintsValid {
+		return nil, nil, fmt.Errorf("root CA certificate is not a valid CA")
+	}
+	if err := cert.CheckSignatureFrom(cert); err != nil {
+		return nil, nil, fmt.Errorf("root CA certificate is not self-signed: %w", err)
+	}
+
+	keyBlock, keyRest := pem.Decode(keyPEM)
+	if keyBlock == nil {
+		return nil, nil, fmt.Errorf("root CA private key must be PEM encoded")
+	}
+	if len(bytes.TrimSpace(keyRest)) != 0 {
+		return nil, nil, fmt.Errorf("root CA private key PEM contains trailing data")
+	}
+
+	var key *ecdsa.PrivateKey
+	switch keyBlock.Type {
+	case "EC PRIVATE KEY":
+		key, err = x509.ParseECPrivateKey(keyBlock.Bytes)
+	case "PRIVATE KEY":
+		var parsed any
+		parsed, err = x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+		if err == nil {
+			var ok bool
+			key, ok = parsed.(*ecdsa.PrivateKey)
+			if !ok {
+				return nil, nil, fmt.Errorf("root CA private key must be an EC key")
+			}
+		}
+	default:
+		return nil, nil, fmt.Errorf("unsupported root CA private key PEM type %q", keyBlock.Type)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse root CA private key: %w", err)
+	}
+	if key.Curve != elliptic.P384() {
+		return nil, nil, fmt.Errorf("root CA private key must use the P-384 curve")
+	}
+
+	pub, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok || !pub.Equal(&key.PublicKey) {
+		return nil, nil, fmt.Errorf("root CA certificate and private key do not match")
+	}
+
+	return cert, key, nil
+}
 
 // CreateRootCA generates a self-signed root CA certificate and key pair.
 func CreateRootCA(commonName string, validFor time.Duration) (*x509.Certificate, *ecdsa.PrivateKey, []byte, error) {

@@ -109,12 +109,15 @@ func main() {
 	// Initialize rate limiter
 	_ = ratelimit.NewRateLimiter(redisStore.Client(), cfg.RateLimitPerSecond, cfg.RateLimitBurst)
 
-	// Generate PKI root CA
-	rootCert, rootKey, _, err := pki.CreateRootCA("miniKMS Root CA", 10*365*24*time.Hour)
+	// Load the shared PKI root CA. Generating it in-process would give every
+	// replica a different trust root and invalidate rolling deployments.
+	rootCert, rootKey, err := pki.LoadRootCAFromSources(
+		cfg.RootCACert, cfg.RootCACertFile, cfg.RootCAKey, cfg.RootCAKeyFile,
+	)
 	if err != nil {
-		log.Fatalf("Failed to create PKI root CA: %v", err)
+		log.Fatalf("Failed to load PKI root CA: %v", err)
 	}
-	log.Println("PKI root CA generated")
+	log.Println("Shared PKI root CA loaded successfully")
 
 	// Initialize Org CA wrap manager
 	orgCAWrapMgr := keys.NewOrgCAWrapManager(pgStore)
@@ -132,6 +135,7 @@ func main() {
 	keySvc := service.NewKeyService(dekManager, versionManager, auditLogger)
 	auditSvc := service.NewAuditService(auditLogger, pgStore)
 	pkiSvc := service.NewPKIService(rootCert, rootKey, auditLogger, pgStore)
+	pkiSvc.SetOrgKeyManager(orgKeyMgr)
 	pkiSvc.SetOrgCAWrapManager(orgCAWrapMgr)
 	pkiSvc.SetShamirConfig(cfg.ShamirTotalShares, cfg.ShamirThreshold)
 	if escrowMgr != nil {

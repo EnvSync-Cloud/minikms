@@ -42,3 +42,9 @@ type Store interface {
 	GetNextCRLNumber(ctx context.Context, issuerSerial string) (int64, error)
 	GetCertRevocationEntry(ctx context.Context, serialNumber string) (*CRLEntryRecord, error)
 }
+
+// OrgCABootstrapLocker serializes organization CA creation across replicas.
+// Stores that do not implement it remain suitable for single-process tests.
+type OrgCABootstrapLocker interface {
+	AcquireOrgCABootstrapLock(ctx context.Context, orgID string) (release func(), err error)
+}

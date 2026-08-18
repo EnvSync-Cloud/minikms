@@ -23,11 +23,18 @@ type PKIService struct {
 	rootKey      *ecdsa.PrivateKey
 	auditLogger  *audit.AuditLogger
 	store        pkistore.Store
+	orgKeyMgr    *keys.OrgKeyManager
 	orgCAWrapMgr *keys.OrgCAWrapManager
 	shamirShares int
 	shamirThresh int
 	escrowMgr    *escrow.Manager
 	custodians   []string
+}
+
+// SetOrgKeyManager enables durable encryption of Org CA private keys. The
+// encrypted key can then be loaded by any replica from the certificate store.
+func (s *PKIService) SetOrgKeyManager(manager *keys.OrgKeyManager) {
+	s.orgKeyMgr = manager
 }
 
 // NewPKIService creates a new PKIService.
@@ -80,8 +87,7 @@ type CreateOrgCAResponse struct {
 }
 
 // CreateOrgCAFull creates an org intermediate CA certificate and returns the
-// parsed certificate and private key alongside the response. This is used by
-// the gRPC adapter to cache the org CA for subsequent IssueMemberCert calls.
+// parsed certificate and private key alongside the response.
 func (s *PKIService) CreateOrgCAFull(ctx context.Context, req *CreateOrgCARequest) (*CreateOrgCAResponse, *x509.Certificate, *ecdsa.PrivateKey, error) {
 	if req == nil {
 		return nil, nil, nil, invalidArgument("request is required")
@@ -94,6 +100,25 @@ func (s *PKIService) CreateOrgCAFull(ctx context.Context, req *CreateOrgCAReques
 	}
 	if s.rootCert == nil || s.rootKey == nil {
 		return nil, nil, nil, NewDomainError(ErrorFailedPrecondition, "root CA is not initialized", nil)
+	}
+	if s.store != nil && s.orgKeyMgr == nil {
+		return nil, nil, nil, NewDomainError(ErrorFailedPrecondition, "durable organization CA storage is not initialized", nil)
+	}
+
+	if s.store != nil {
+		if locker, ok := s.store.(pkistore.OrgCABootstrapLocker); ok {
+			release, err := locker.AcquireOrgCABootstrapLock(ctx, req.OrgID)
+			if err != nil {
+				return nil, nil, nil, internalError("failed to lock organization CA bootstrap", err)
+			}
+			defer release()
+		}
+
+		if existing, err := s.loadOrgCA(ctx, req.OrgID); err != nil {
+			return nil, nil, nil, err
+		} else if existing != nil {
+			return s.orgCAResult(existing)
+		}
 	}
 
 	cert, key, certDER, err := pki.CreateOrgIntermediateCA(
@@ -120,18 +145,26 @@ func (s *PKIService) CreateOrgCAFull(ctx context.Context, req *CreateOrgCAReques
 		}
 	}
 
-	// Persist to database
 	if s.store != nil {
-		if err := s.store.StoreCertificate(ctx, &pkistore.CertRecord{
-			SerialNumber: serialHex,
-			CertType:     "org_intermediate_ca",
-			OrgID:        req.OrgID,
-			SubjectCN:    cert.Subject.CommonName,
-			CertPEM:      string(certPEM),
-			Status:       "active",
-			IssuedAt:     cert.NotBefore,
-			ExpiresAt:    cert.NotAfter,
+		encryptedKey, err := s.encryptOrgCAKey(req.OrgID, serialHex, key)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if err := s.store.StoreCertificateWithKey(ctx, &pkistore.CertRecord{
+			SerialNumber:        serialHex,
+			CertType:            "org_intermediate_ca",
+			OrgID:               req.OrgID,
+			SubjectCN:           cert.Subject.CommonName,
+			CertPEM:             string(certPEM),
+			EncryptedPrivateKey: encryptedKey,
+			Status:              "active",
+			IssuedAt:            cert.NotBefore,
+			ExpiresAt:           cert.NotAfter,
 		}); err != nil {
+			// A replica may have completed bootstrap while this request waited.
+			if existing, loadErr := s.loadOrgCA(ctx, req.OrgID); loadErr == nil && existing != nil {
+				return s.orgCAResult(existing)
+			}
 			return nil, nil, nil, internalError("failed to store org CA certificate", err)
 		}
 	}
@@ -144,6 +177,109 @@ func (s *PKIService) CreateOrgCAFull(ctx context.Context, req *CreateOrgCAReques
 		SerialHex: serialHex,
 	}
 	return resp, cert, key, nil
+}
+
+// LoadOrgCA returns the active Org CA certificate and private key from shared
+// durable storage. It never relies on process-local adapter state.
+func (s *PKIService) LoadOrgCA(ctx context.Context, orgID string) (*x509.Certificate, *ecdsa.PrivateKey, error) {
+	if orgID == "" {
+		return nil, nil, invalidArgument("org_id is required")
+	}
+	if s.store == nil || s.orgKeyMgr == nil {
+		return nil, nil, NewDomainError(ErrorFailedPrecondition, "durable organization CA storage is not initialized", nil)
+	}
+	record, err := s.loadOrgCA(ctx, orgID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if record == nil {
+		return nil, nil, NewDomainError(ErrorFailedPrecondition, "organization CA is not available", nil)
+	}
+	_, cert, key, err := s.orgCAResult(record)
+	return cert, key, err
+}
+
+func (s *PKIService) loadOrgCA(ctx context.Context, orgID string) (*pkistore.CertRecord, error) {
+	record, err := s.store.GetOrgCA(ctx, orgID)
+	if err != nil {
+		return nil, internalError("failed to load organization CA", err)
+	}
+	return record, nil
+}
+
+func (s *PKIService) encryptOrgCAKey(orgID, serial string, key *ecdsa.PrivateKey) ([]byte, error) {
+	orgKey, err := s.orgKeyMgr.DeriveOrgKey(orgID)
+	if err != nil {
+		return nil, internalError("failed to derive organization key", err)
+	}
+	defer crypto.ZeroizeBytes(orgKey)
+
+	keyBytes := crypto.MarshalECPrivateKey(key)
+	defer crypto.ZeroizeBytes(keyBytes)
+	encrypted, err := crypto.Encrypt(orgKey, keyBytes, []byte(orgCAKeyAAD(orgID, serial)))
+	if err != nil {
+		return nil, internalError("failed to encrypt organization CA key", err)
+	}
+	return encrypted, nil
+}
+
+func (s *PKIService) decryptOrgCAKey(record *pkistore.CertRecord) (*ecdsa.PrivateKey, error) {
+	if len(record.EncryptedPrivateKey) == 0 {
+		return nil, NewDomainError(ErrorFailedPrecondition,
+			"organization CA private key is not available in durable storage", nil)
+	}
+	orgKey, err := s.orgKeyMgr.DeriveOrgKey(record.OrgID)
+	if err != nil {
+		return nil, internalError("failed to derive organization key", err)
+	}
+	defer crypto.ZeroizeBytes(orgKey)
+
+	keyBytes, err := crypto.Decrypt(orgKey, record.EncryptedPrivateKey,
+		[]byte(orgCAKeyAAD(record.OrgID, record.SerialNumber)))
+	if err != nil {
+		return nil, internalError("failed to decrypt organization CA key", err)
+	}
+	defer crypto.ZeroizeBytes(keyBytes)
+	key, err := crypto.UnmarshalECPrivateKey(keyBytes)
+	if err != nil {
+		return nil, internalError("failed to decode organization CA key", err)
+	}
+	return key, nil
+}
+
+func (s *PKIService) parseStoredOrgCA(record *pkistore.CertRecord) (*x509.Certificate, *ecdsa.PrivateKey, error) {
+	block, rest := pem.Decode([]byte(record.CertPEM))
+	if block == nil || len(rest) != 0 {
+		return nil, nil, internalError("stored organization CA certificate is invalid", nil)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, nil, internalError("failed to parse organization CA certificate", err)
+	}
+	key, err := s.decryptOrgCAKey(record)
+	if err != nil {
+		return nil, nil, err
+	}
+	pub, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok || !pub.Equal(&key.PublicKey) {
+		return nil, nil, internalError("organization CA certificate and key do not match", nil)
+	}
+	return cert, key, nil
+}
+
+func orgCAKeyAAD(orgID, serial string) string {
+	return "org-ca-key:" + orgID + ":" + serial
+}
+
+func (s *PKIService) orgCAResult(record *pkistore.CertRecord) (*CreateOrgCAResponse, *x509.Certificate, *ecdsa.PrivateKey, error) {
+	cert, key, err := s.parseStoredOrgCA(record)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return &CreateOrgCAResponse{
+		CertPEM:   record.CertPEM,
+		SerialHex: record.SerialNumber,
+	}, cert, key, nil
 }
 
 // CreateOrgCA creates an org intermediate CA certificate.
