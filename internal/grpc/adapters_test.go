@@ -12,6 +12,7 @@ import (
 	"time"
 
 	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
+	"github.com/envsync-cloud/minikms/internal/audit"
 	"github.com/envsync-cloud/minikms/internal/keys"
 	"github.com/envsync-cloud/minikms/internal/service"
 	"github.com/envsync-cloud/minikms/internal/testutil"
@@ -110,9 +111,6 @@ func TestNewPKIAdapter(t *testing.T) {
 	a := NewPKIAdapter(nil)
 	if a == nil {
 		t.Fatal("NewPKIAdapter returned nil")
-	}
-	if a.orgCAs == nil {
-		t.Fatal("orgCAs map not initialized")
 	}
 }
 
@@ -424,6 +422,45 @@ func TestPKIAdapter_IssueMemberCert(t *testing.T) {
 	}
 	if resp.SerialHex == "" {
 		t.Error("SerialHex is empty")
+	}
+}
+
+func TestPKIAdapter_IssueMemberCertAcrossReplicas(t *testing.T) {
+	ctx := context.Background()
+	certStore := testutil.NewMockPKICertStore()
+	rootCert, rootKey, err := generateTestRootCA()
+	if err != nil {
+		t.Fatalf("generateTestRootCA: %v", err)
+	}
+
+	newReplica := func() *PKIAdapter {
+		auditLogger := audit.NewAuditLogger(testutil.NewMockAuditStore())
+		svc := service.NewPKIService(rootCert, rootKey, auditLogger, certStore)
+		holder := keys.NewRootKeyHolder()
+		if err := holder.Load(testutil.TestRootKeyHex); err != nil {
+			t.Fatalf("load test root key: %v", err)
+		}
+		svc.SetOrgKeyManager(keys.NewOrgKeyManager(holder))
+		return NewPKIAdapter(svc)
+	}
+
+	first := newReplica()
+	second := newReplica()
+	if _, err := first.CreateOrgCA(ctx, &pb.CreateOrgCARequest{
+		OrgId: "org-ha-adapter", OrgName: "HA Adapter Org",
+	}); err != nil {
+		t.Fatalf("CreateOrgCA on first replica: %v", err)
+	}
+
+	resp, err := second.IssueMemberCert(ctx, &pb.IssueMemberCertRequest{
+		MemberId: "member-ha", MemberEmail: "ha@example.com",
+		OrgId: "org-ha-adapter", Role: "admin",
+	})
+	if err != nil {
+		t.Fatalf("IssueMemberCert on second replica: %v", err)
+	}
+	if resp.SerialHex == "" {
+		t.Fatal("second replica did not issue a member certificate")
 	}
 }
 
