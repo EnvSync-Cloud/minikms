@@ -12,6 +12,7 @@ import (
 	"time"
 
 	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
+	"github.com/envsync-cloud/minikms/internal/keys"
 	"github.com/envsync-cloud/minikms/internal/service"
 	"github.com/envsync-cloud/minikms/internal/testutil"
 	"google.golang.org/grpc/codes"
@@ -343,6 +344,11 @@ func setupPKIAdapter(t *testing.T) *PKIAdapter {
 	}
 
 	pkiSvc := service.NewPKIService(rootCert, rootKey, auditLogger, certStore)
+	holder := keys.NewRootKeyHolder()
+	if err := holder.Load(testutil.TestRootKeyHex); err != nil {
+		t.Fatalf("load test root key: %v", err)
+	}
+	pkiSvc.SetOrgKeyManager(keys.NewOrgKeyManager(holder))
 	return NewPKIAdapter(pkiSvc)
 }
 

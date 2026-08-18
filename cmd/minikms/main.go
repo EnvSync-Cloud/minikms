@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -134,6 +135,7 @@ func main() {
 	keySvc := service.NewKeyService(dekManager, versionManager, auditLogger)
 	auditSvc := service.NewAuditService(auditLogger, pgStore)
 	pkiSvc := service.NewPKIService(rootCert, rootKey, auditLogger, pgStore)
+	pkiSvc.SetOrgKeyManager(orgKeyMgr)
 	pkiSvc.SetOrgCAWrapManager(orgCAWrapMgr)
 	pkiSvc.SetShamirConfig(cfg.ShamirTotalShares, cfg.ShamirThreshold)
 	if escrowMgr != nil {
