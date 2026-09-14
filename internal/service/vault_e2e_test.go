@@ -70,6 +70,7 @@ func setupVaultStack(t *testing.T) *vaultStack {
 		t.Fatalf("CreateRootCA: %v", err)
 	}
 	pkiSvc := NewPKIService(rootCert, rootKey, auditLogger, pgStore)
+	pkiSvc.SetOrgKeyManager(orgKeyMgr)
 
 	return &vaultStack{
 		kmsSvc:   kmsSvc,

@@ -100,8 +100,8 @@ func LoadRootKeyHex(value, path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("stat root key file: %w", err)
 	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return "", fmt.Errorf("root key file permissions must be 0600 or stricter")
+	if info.Mode().Perm()&0o027 != 0 {
+		return "", fmt.Errorf("root key file must not be group-writable or accessible by other users")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

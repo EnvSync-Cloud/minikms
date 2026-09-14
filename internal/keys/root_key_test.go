@@ -122,6 +122,12 @@ func TestLoadRootKeyHex_ValueAndProtectedFile(t *testing.T) {
 	if err != nil || got != value {
 		t.Fatalf("LoadRootKeyHex(file): got=%q err=%v", got, err)
 	}
+	if err := os.Chmod(path, 0o440); err != nil {
+		t.Fatalf("chmod group-readable: %v", err)
+	}
+	if _, err := LoadRootKeyHex("", path); err != nil {
+		t.Fatalf("LoadRootKeyHex rejected a protected fsGroup-readable file: %v", err)
+	}
 
 	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatalf("chmod: %v", err)

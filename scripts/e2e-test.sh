@@ -20,6 +20,7 @@ export MINIKMS_DB_URL="postgres://minikms_test:testpass@localhost:5433/minikms_t
 psql -v ON_ERROR_STOP=1 "$MINIKMS_DB_URL" -f "$PROJECT_DIR/migrations/001_initial_schema.sql"
 psql -v ON_ERROR_STOP=1 "$MINIKMS_DB_URL" -f "$PROJECT_DIR/migrations/002_vault_storage.sql"
 psql -v ON_ERROR_STOP=1 "$MINIKMS_DB_URL" -f "$PROJECT_DIR/migrations/003_escrow_recovery.sql"
+psql -v ON_ERROR_STOP=1 "$MINIKMS_DB_URL" -f "$PROJECT_DIR/migrations/004_multi_replica_ha.sql"
 
 echo "Running E2E tests..."
 export MINIKMS_REDIS_URL="redis://localhost:6380/0"

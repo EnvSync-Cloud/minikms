@@ -4,11 +4,15 @@ import "github.com/kelseyhightower/envconfig"
 
 // Config holds all miniKMS configuration loaded from environment variables.
 type Config struct {
-	GRPCAddr    string `envconfig:"MINIKMS_GRPC_ADDR" default:"0.0.0.0:50051"`
-	DBUrl       string `envconfig:"MINIKMS_DB_URL" required:"true"`
-	RedisURL    string `envconfig:"MINIKMS_REDIS_URL" required:"true"`
-	RootKey     string `envconfig:"MINIKMS_ROOT_KEY"`
-	RootKeyFile string `envconfig:"MINIKMS_ROOT_KEY_FILE"`
+	GRPCAddr       string `envconfig:"MINIKMS_GRPC_ADDR" default:"0.0.0.0:50051"`
+	DBUrl          string `envconfig:"MINIKMS_DB_URL" required:"true"`
+	RedisURL       string `envconfig:"MINIKMS_REDIS_URL" required:"true"`
+	RootKey        string `envconfig:"MINIKMS_ROOT_KEY"`
+	RootKeyFile    string `envconfig:"MINIKMS_ROOT_KEY_FILE"`
+	RootCACert     string `envconfig:"MINIKMS_ROOT_CA_CERT"`
+	RootCACertFile string `envconfig:"MINIKMS_ROOT_CA_CERT_FILE"`
+	RootCAKey      string `envconfig:"MINIKMS_ROOT_CA_KEY"`
+	RootCAKeyFile  string `envconfig:"MINIKMS_ROOT_CA_KEY_FILE"`
 
 	// Session JWT signing key sources. Source selection and key validation are
 	// handled by the auth loader.

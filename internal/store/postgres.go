@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -428,13 +429,14 @@ func (s *PostgresStore) GetCertificateBySerialWithKey(ctx context.Context, seria
 
 func (s *PostgresStore) GetOrgCA(ctx context.Context, orgID string) (*pkistore.CertRecord, error) {
 	row := s.pool.QueryRow(ctx,
-		`SELECT id, serial_number, cert_type, org_id, subject_cn, cert_pem, status, issued_at, expires_at
+		`SELECT id, serial_number, cert_type, org_id, subject_cn, cert_pem, encrypted_private_key, status, issued_at, expires_at
 		 FROM certificates
 		 WHERE org_id = $1 AND cert_type = 'org_intermediate_ca' AND status = 'active'
 		 ORDER BY created_at DESC LIMIT 1`, orgID)
 
 	var r pkistore.CertRecord
-	err := row.Scan(&r.ID, &r.SerialNumber, &r.CertType, &r.OrgID, &r.SubjectCN, &r.CertPEM, &r.Status, &r.IssuedAt, &r.ExpiresAt)
+	err := row.Scan(&r.ID, &r.SerialNumber, &r.CertType, &r.OrgID, &r.SubjectCN, &r.CertPEM,
+		&r.EncryptedPrivateKey, &r.Status, &r.IssuedAt, &r.ExpiresAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -442,6 +444,33 @@ func (s *PostgresStore) GetOrgCA(ctx context.Context, orgID string) (*pkistore.C
 		return nil, err
 	}
 	return &r, nil
+}
+
+// AcquireOrgCABootstrapLock holds a PostgreSQL advisory lock on a dedicated
+// connection until release is called. It prevents concurrent replicas from
+// creating different active CA keys for the same organization.
+func (s *PostgresStore) AcquireOrgCABootstrapLock(ctx context.Context, orgID string) (func(), error) {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire Org CA bootstrap connection: %w", err)
+	}
+	if _, err := conn.Exec(ctx,
+		`SELECT pg_advisory_lock(hashtextextended('minikms:org-ca:' || $1, 0))`, orgID); err != nil {
+		conn.Release()
+		return nil, fmt.Errorf("acquire Org CA bootstrap lock: %w", err)
+	}
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = conn.Exec(releaseCtx,
+				`SELECT pg_advisory_unlock(hashtextextended('minikms:org-ca:' || $1, 0))`, orgID)
+			conn.Release()
+		})
+	}
+	return release, nil
 }
 
 func (s *PostgresStore) UpdateCertificateStatus(ctx context.Context, serialNumber, status string) error {

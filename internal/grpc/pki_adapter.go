@@ -2,10 +2,7 @@ package grpc
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/x509"
 	"encoding/pem"
-	"sync"
 
 	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
 	"github.com/envsync-cloud/minikms/internal/keys"
@@ -14,42 +11,27 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type orgCAEntry struct {
-	cert *x509.Certificate
-	key  *ecdsa.PrivateKey
-}
-
 // PKIAdapter bridges the proto PKIServiceServer interface to the internal
-// PKIService. It caches org CA cert+key so that IssueMemberCert can look
-// them up by org_id alone.
+// PKIService. Durable CA material is loaded by the service for every request,
+// allowing calls to move freely between replicas.
 type PKIAdapter struct {
 	pb.UnimplementedPKIServiceServer
 	pkiSvc *service.PKIService
-
-	mu     sync.RWMutex
-	orgCAs map[string]*orgCAEntry
 }
 
 // NewPKIAdapter creates a new PKIAdapter.
 func NewPKIAdapter(pkiSvc *service.PKIService) *PKIAdapter {
-	return &PKIAdapter{
-		pkiSvc: pkiSvc,
-		orgCAs: make(map[string]*orgCAEntry),
-	}
+	return &PKIAdapter{pkiSvc: pkiSvc}
 }
 
 func (a *PKIAdapter) CreateOrgCA(ctx context.Context, req *pb.CreateOrgCARequest) (*pb.CreateOrgCAResponse, error) {
-	resp, cert, key, err := a.pkiSvc.CreateOrgCAFull(ctx, &service.CreateOrgCARequest{
+	resp, _, _, err := a.pkiSvc.CreateOrgCAFull(ctx, &service.CreateOrgCARequest{
 		OrgID:   req.OrgId,
 		OrgName: req.OrgName,
 	})
 	if err != nil {
 		return nil, toStatusError(err)
 	}
-
-	a.mu.Lock()
-	a.orgCAs[req.OrgId] = &orgCAEntry{cert: cert, key: key}
-	a.mu.Unlock()
 
 	return &pb.CreateOrgCAResponse{
 		CertPem:   resp.CertPEM,
@@ -58,12 +40,9 @@ func (a *PKIAdapter) CreateOrgCA(ctx context.Context, req *pb.CreateOrgCARequest
 }
 
 func (a *PKIAdapter) IssueMemberCert(ctx context.Context, req *pb.IssueMemberCertRequest) (*pb.IssueMemberCertResponse, error) {
-	a.mu.RLock()
-	entry, ok := a.orgCAs[req.OrgId]
-	a.mu.RUnlock()
-	if !ok {
-		return nil, status.Error(codes.FailedPrecondition,
-			"organization CA is not initialized; call CreateOrgCA first")
+	orgCACert, orgCAKey, err := a.pkiSvc.LoadOrgCA(ctx, req.OrgId)
+	if err != nil {
+		return nil, toStatusError(err)
 	}
 
 	resp, err := a.pkiSvc.IssueMemberCert(ctx, &service.IssueMemberCertRequest{
@@ -71,8 +50,8 @@ func (a *PKIAdapter) IssueMemberCert(ctx context.Context, req *pb.IssueMemberCer
 		MemberEmail: req.MemberEmail,
 		OrgID:       req.OrgId,
 		Role:        req.Role,
-		OrgCACert:   entry.cert,
-		OrgCAKey:    entry.key,
+		OrgCACert:   orgCACert,
+		OrgCAKey:    orgCAKey,
 	})
 	if err != nil {
 		return nil, toStatusError(err)
@@ -81,7 +60,7 @@ func (a *PKIAdapter) IssueMemberCert(ctx context.Context, req *pb.IssueMemberCer
 	// Create Org CA wrap for the new member so they can decrypt vault entries
 	memberPub, err := keys.ParseMemberCertPublicKey(resp.CertPEM)
 	if err == nil {
-		_ = a.pkiSvc.WrapOrgCAForMember(ctx, req.OrgId, req.MemberId, resp.SerialHex, memberPub, entry.key)
+		_ = a.pkiSvc.WrapOrgCAForMember(ctx, req.OrgId, req.MemberId, resp.SerialHex, memberPub, orgCAKey)
 	}
 
 	return &pb.IssueMemberCertResponse{
@@ -112,19 +91,16 @@ func (a *PKIAdapter) RevokeCert(ctx context.Context, req *pb.RevokeCertRequest) 
 }
 
 func (a *PKIAdapter) GetCRL(ctx context.Context, req *pb.GetCRLRequest) (*pb.GetCRLResponse, error) {
-	a.mu.RLock()
-	entry, ok := a.orgCAs[req.OrgId]
-	a.mu.RUnlock()
-	if !ok {
-		return nil, status.Error(codes.FailedPrecondition,
-			"organization CA is not initialized; call CreateOrgCA first")
+	orgCACert, orgCAKey, err := a.pkiSvc.LoadOrgCA(ctx, req.OrgId)
+	if err != nil {
+		return nil, toStatusError(err)
 	}
 
 	resp, err := a.pkiSvc.GetCRL(ctx, &service.GetCRLRequest{
 		OrgID:      req.OrgId,
 		DeltaOnly:  req.DeltaOnly,
-		IssuerCert: entry.cert,
-		IssuerKey:  entry.key,
+		IssuerCert: orgCACert,
+		IssuerKey:  orgCAKey,
 	})
 	if err != nil {
 		return nil, toStatusError(err)
