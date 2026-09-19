@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"math/big"
 	"testing"
 	"time"
@@ -471,6 +472,85 @@ func TestPKIAdapter_IssueMemberCert_NoOrgCA(t *testing.T) {
 		MemberEmail: "alice@example.com",
 		OrgId:       "org-nonexistent",
 		Role:        "admin",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing org CA")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("code = %v, want %v", status.Code(err), codes.FailedPrecondition)
+	}
+}
+
+func TestPKIAdapter_IssueLeafCert(t *testing.T) {
+	adapter := setupPKIAdapter(t)
+	ctx := context.Background()
+
+	_, err := adapter.CreateOrgCA(ctx, &pb.CreateOrgCARequest{
+		OrgId:   "org-leaf-1",
+		OrgName: "Leaf Org",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrgCA: %v", err)
+	}
+
+	resp, err := adapter.IssueLeafCert(ctx, &pb.IssueLeafCertRequest{
+		OrgId:        "org-leaf-1",
+		CommonName:   "api.internal",
+		DnsSans:      []string{"api.internal", "127.0.0.1"},
+		TtlDays:      90,
+		KeyAlgorithm: "ECDSA_P256",
+	})
+	if err != nil {
+		t.Fatalf("IssueLeafCert: %v", err)
+	}
+	if resp.CertPem == "" || resp.KeyPem == "" || resp.SerialHex == "" {
+		t.Fatal("leaf cert response is incomplete")
+	}
+}
+
+func TestPKIAdapter_SignCSR(t *testing.T) {
+	adapter := setupPKIAdapter(t)
+	ctx := context.Background()
+
+	_, err := adapter.CreateOrgCA(ctx, &pb.CreateOrgCARequest{
+		OrgId:   "org-csr-1",
+		OrgName: "CSR Org",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrgCA: %v", err)
+	}
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: "svc.internal"},
+		DNSNames: []string{"svc.internal"},
+	}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+
+	resp, err := adapter.SignCSR(ctx, &pb.SignCSRRequest{
+		OrgId:   "org-csr-1",
+		CsrPem:  string(csrPEM),
+		TtlDays: 30,
+	})
+	if err != nil {
+		t.Fatalf("SignCSR: %v", err)
+	}
+	if resp.CertPem == "" || resp.SerialHex == "" {
+		t.Fatal("CSR sign response is incomplete")
+	}
+}
+
+func TestPKIAdapter_IssueLeafCert_NoOrgCA(t *testing.T) {
+	adapter := setupPKIAdapter(t)
+	_, err := adapter.IssueLeafCert(context.Background(), &pb.IssueLeafCertRequest{
+		OrgId:      "org-missing",
+		CommonName: "api.internal",
 	})
 	if err == nil {
 		t.Fatal("expected error for missing org CA")

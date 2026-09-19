@@ -70,6 +70,53 @@ func (a *PKIAdapter) IssueMemberCert(ctx context.Context, req *pb.IssueMemberCer
 	}, nil
 }
 
+func (a *PKIAdapter) IssueLeafCert(ctx context.Context, req *pb.IssueLeafCertRequest) (*pb.IssueLeafCertResponse, error) {
+	orgCACert, orgCAKey, err := a.pkiSvc.LoadOrgCA(ctx, req.OrgId)
+	if err != nil {
+		return nil, toStatusError(err)
+	}
+
+	resp, err := a.pkiSvc.IssueLeafCert(ctx, &service.IssueLeafCertRequest{
+		OrgID:        req.OrgId,
+		CommonName:   req.CommonName,
+		DNSSans:      req.DnsSans,
+		TTLDays:      int(req.TtlDays),
+		KeyAlgorithm: req.KeyAlgorithm,
+		OrgCACert:    orgCACert,
+		OrgCAKey:     orgCAKey,
+	})
+	if err != nil {
+		return nil, toStatusError(err)
+	}
+	return &pb.IssueLeafCertResponse{
+		CertPem:   resp.CertPEM,
+		KeyPem:    resp.KeyPEM,
+		SerialHex: resp.SerialHex,
+	}, nil
+}
+
+func (a *PKIAdapter) SignCSR(ctx context.Context, req *pb.SignCSRRequest) (*pb.SignCSRResponse, error) {
+	orgCACert, orgCAKey, err := a.pkiSvc.LoadOrgCA(ctx, req.OrgId)
+	if err != nil {
+		return nil, toStatusError(err)
+	}
+
+	resp, err := a.pkiSvc.SignCSR(ctx, &service.SignCSRServiceRequest{
+		OrgID:     req.OrgId,
+		CSRPEM:    req.CsrPem,
+		TTLDays:   int(req.TtlDays),
+		OrgCACert: orgCACert,
+		OrgCAKey:  orgCAKey,
+	})
+	if err != nil {
+		return nil, toStatusError(err)
+	}
+	return &pb.SignCSRResponse{
+		CertPem:   resp.CertPEM,
+		SerialHex: resp.SerialHex,
+	}, nil
+}
+
 func (a *PKIAdapter) GetRootCA(ctx context.Context, _ *pb.GetRootCARequest) (*pb.GetRootCAResponse, error) {
 	rootCert := a.pkiSvc.RootCert()
 	if rootCert == nil {
