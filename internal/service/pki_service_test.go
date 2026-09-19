@@ -7,6 +7,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"testing"
 	"time"
@@ -581,6 +582,86 @@ func TestIssueMemberCert_WithStore(t *testing.T) {
 	}
 	if rec.CertType != "member" {
 		t.Errorf("CertType = %q, want %q", rec.CertType, "member")
+	}
+}
+
+func TestIssueLeafCert_WithStore(t *testing.T) {
+	svc, _, _, certStore := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	_, orgCACert, orgCAKey, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: "org-leaf", OrgName: "Leaf Org",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrgCAFull: %v", err)
+	}
+
+	resp, err := svc.IssueLeafCert(ctx, &IssueLeafCertRequest{
+		OrgID:        "org-leaf",
+		CommonName:   "api.internal",
+		DNSSans:      []string{"api.internal"},
+		TTLDays:      90,
+		KeyAlgorithm: "ECDSA_P256",
+		OrgCACert:    orgCACert,
+		OrgCAKey:     orgCAKey,
+	})
+	if err != nil {
+		t.Fatalf("IssueLeafCert: %v", err)
+	}
+	if resp.KeyPEM == "" {
+		t.Fatal("managed leaf should return a private key")
+	}
+
+	rec, _ := certStore.GetCertificateBySerial(ctx, resp.SerialHex)
+	if rec == nil {
+		t.Fatal("leaf cert should be stored")
+	}
+	if rec.CertType != "leaf" {
+		t.Errorf("CertType = %q, want leaf", rec.CertType)
+	}
+}
+
+func TestSignCSR_WithStore(t *testing.T) {
+	svc, _, _, certStore := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	_, orgCACert, orgCAKey, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: "org-csr", OrgName: "CSR Org",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrgCAFull: %v", err)
+	}
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: "svc.internal"},
+		DNSNames: []string{"svc.internal"},
+	}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+
+	resp, err := svc.SignCSR(ctx, &SignCSRServiceRequest{
+		OrgID:     "org-csr",
+		CSRPEM:    string(csrPEM),
+		TTLDays:   30,
+		OrgCACert: orgCACert,
+		OrgCAKey:  orgCAKey,
+	})
+	if err != nil {
+		t.Fatalf("SignCSR: %v", err)
+	}
+
+	rec, _ := certStore.GetCertificateBySerial(ctx, resp.SerialHex)
+	if rec == nil {
+		t.Fatal("signed cert should be stored")
+	}
+	if rec.CertType != "leaf" {
+		t.Errorf("CertType = %q, want leaf", rec.CertType)
 	}
 }
 

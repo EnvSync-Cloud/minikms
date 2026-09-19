@@ -653,6 +653,130 @@ func (s *PKIService) IssueMemberCert(ctx context.Context, req *IssueMemberCertRe
 	}, nil
 }
 
+type IssueLeafCertRequest struct {
+	OrgID        string
+	CommonName   string
+	DNSSans      []string
+	TTLDays      int
+	KeyAlgorithm string
+	OrgCACert    *x509.Certificate
+	OrgCAKey     *ecdsa.PrivateKey
+}
+
+type IssueLeafCertResponse struct {
+	CertPEM   string
+	KeyPEM    string
+	SerialHex string
+}
+
+func (s *PKIService) IssueLeafCert(ctx context.Context, req *IssueLeafCertRequest) (*IssueLeafCertResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := requireFields(
+		requiredField("org_id", req.OrgID),
+		requiredField("common_name", req.CommonName),
+	); err != nil {
+		return nil, err
+	}
+	if req.OrgCACert == nil || req.OrgCAKey == nil {
+		return nil, NewDomainError(ErrorFailedPrecondition, "organization CA is not available", nil)
+	}
+
+	ttl := time.Duration(req.TTLDays) * 24 * time.Hour
+	cert, keyPEM, certDER, err := pki.CreateLeafCertificate(
+		req.CommonName, req.DNSSans, req.OrgCACert, req.OrgCAKey, ttl, req.KeyAlgorithm, nil,
+	)
+	if err != nil {
+		return nil, internalError("failed to issue leaf certificate", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	serialHex := cert.SerialNumber.Text(16)
+
+	if s.store != nil {
+		if err := s.store.StoreCertificate(ctx, &pkistore.CertRecord{
+			SerialNumber: serialHex,
+			CertType:     "leaf",
+			OrgID:        req.OrgID,
+			SubjectCN:    req.CommonName,
+			CertPEM:      string(certPEM),
+			Status:       "active",
+			IssuedAt:     cert.NotBefore,
+			ExpiresAt:    cert.NotAfter,
+		}); err != nil {
+			return nil, internalError("failed to store leaf certificate", err)
+		}
+	}
+
+	_ = s.auditLogger.Log(ctx, req.OrgID, "leaf_cert_issued", "",
+		fmt.Sprintf("Leaf certificate issued for %s", req.CommonName), "")
+
+	return &IssueLeafCertResponse{
+		CertPEM:   string(certPEM),
+		KeyPEM:    string(keyPEM),
+		SerialHex: serialHex,
+	}, nil
+}
+
+type SignCSRServiceRequest struct {
+	OrgID     string
+	CSRPEM    string
+	TTLDays   int
+	OrgCACert *x509.Certificate
+	OrgCAKey  *ecdsa.PrivateKey
+}
+
+type SignCSRServiceResponse struct {
+	CertPEM   string
+	SerialHex string
+}
+
+func (s *PKIService) SignCSR(ctx context.Context, req *SignCSRServiceRequest) (*SignCSRServiceResponse, error) {
+	if req == nil {
+		return nil, invalidArgument("request is required")
+	}
+	if err := requireFields(
+		requiredField("org_id", req.OrgID),
+		requiredField("csr_pem", req.CSRPEM),
+	); err != nil {
+		return nil, err
+	}
+	if req.OrgCACert == nil || req.OrgCAKey == nil {
+		return nil, NewDomainError(ErrorFailedPrecondition, "organization CA is not available", nil)
+	}
+
+	ttl := time.Duration(req.TTLDays) * 24 * time.Hour
+	cert, certDER, err := pki.SignLeafCSR(req.CSRPEM, req.OrgCACert, req.OrgCAKey, ttl, nil)
+	if err != nil {
+		return nil, NewDomainError(ErrorInvalidArgument, "csr is invalid", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	serialHex := cert.SerialNumber.Text(16)
+
+	if s.store != nil {
+		if err := s.store.StoreCertificate(ctx, &pkistore.CertRecord{
+			SerialNumber: serialHex,
+			CertType:     "leaf",
+			OrgID:        req.OrgID,
+			SubjectCN:    cert.Subject.CommonName,
+			CertPEM:      string(certPEM),
+			Status:       "active",
+			IssuedAt:     cert.NotBefore,
+			ExpiresAt:    cert.NotAfter,
+		}); err != nil {
+			return nil, internalError("failed to store signed certificate", err)
+		}
+	}
+
+	_ = s.auditLogger.Log(ctx, req.OrgID, "leaf_csr_signed", "",
+		fmt.Sprintf("CSR signed for %s", cert.Subject.CommonName), "")
+
+	return &SignCSRServiceResponse{
+		CertPEM:   string(certPEM),
+		SerialHex: serialHex,
+	}, nil
+}
+
 // --- Revocation, CRL, and OCSP ---
 
 // RevokeCertRequest represents a request to revoke a certificate.
