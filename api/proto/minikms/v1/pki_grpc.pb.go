@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	PKIService_CreateOrgCA_FullMethodName     = "/minikms.v1.PKIService/CreateOrgCA"
+	PKIService_CreateEnvCA_FullMethodName     = "/minikms.v1.PKIService/CreateEnvCA"
 	PKIService_IssueMemberCert_FullMethodName = "/minikms.v1.PKIService/IssueMemberCert"
 	PKIService_IssueLeafCert_FullMethodName   = "/minikms.v1.PKIService/IssueLeafCert"
 	PKIService_SignCSR_FullMethodName         = "/minikms.v1.PKIService/SignCSR"
@@ -33,10 +34,11 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// PKIService manages the 3-level PKI hierarchy:
-// Root CA -> Org Intermediate CA (IsCA:true, MaxPathLen:0) -> Member Certificate (IsCA:false)
+// PKIService manages the PKI hierarchy:
+// Root CA -> Org Intermediate CA (IsCA:true, MaxPathLen:0) -> member or workload leaf (IsCA:false)
 type PKIServiceClient interface {
 	CreateOrgCA(ctx context.Context, in *CreateOrgCARequest, opts ...grpc.CallOption) (*CreateOrgCAResponse, error)
+	CreateEnvCA(ctx context.Context, in *CreateEnvCARequest, opts ...grpc.CallOption) (*CreateEnvCAResponse, error)
 	IssueMemberCert(ctx context.Context, in *IssueMemberCertRequest, opts ...grpc.CallOption) (*IssueMemberCertResponse, error)
 	IssueLeafCert(ctx context.Context, in *IssueLeafCertRequest, opts ...grpc.CallOption) (*IssueLeafCertResponse, error)
 	SignCSR(ctx context.Context, in *SignCSRRequest, opts ...grpc.CallOption) (*SignCSRResponse, error)
@@ -58,6 +60,16 @@ func (c *pKIServiceClient) CreateOrgCA(ctx context.Context, in *CreateOrgCAReque
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateOrgCAResponse)
 	err := c.cc.Invoke(ctx, PKIService_CreateOrgCA_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pKIServiceClient) CreateEnvCA(ctx context.Context, in *CreateEnvCARequest, opts ...grpc.CallOption) (*CreateEnvCAResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateEnvCAResponse)
+	err := c.cc.Invoke(ctx, PKIService_CreateEnvCA_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -138,10 +150,11 @@ func (c *pKIServiceClient) GetRootCA(ctx context.Context, in *GetRootCARequest, 
 // All implementations must embed UnimplementedPKIServiceServer
 // for forward compatibility.
 //
-// PKIService manages the 3-level PKI hierarchy:
-// Root CA -> Org Intermediate CA (IsCA:true, MaxPathLen:0) -> Member Certificate (IsCA:false)
+// PKIService manages the PKI hierarchy:
+// Root CA -> Org Intermediate CA (IsCA:true, MaxPathLen:0) -> member or workload leaf (IsCA:false)
 type PKIServiceServer interface {
 	CreateOrgCA(context.Context, *CreateOrgCARequest) (*CreateOrgCAResponse, error)
+	CreateEnvCA(context.Context, *CreateEnvCARequest) (*CreateEnvCAResponse, error)
 	IssueMemberCert(context.Context, *IssueMemberCertRequest) (*IssueMemberCertResponse, error)
 	IssueLeafCert(context.Context, *IssueLeafCertRequest) (*IssueLeafCertResponse, error)
 	SignCSR(context.Context, *SignCSRRequest) (*SignCSRResponse, error)
@@ -161,6 +174,9 @@ type UnimplementedPKIServiceServer struct{}
 
 func (UnimplementedPKIServiceServer) CreateOrgCA(context.Context, *CreateOrgCARequest) (*CreateOrgCAResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateOrgCA not implemented")
+}
+func (UnimplementedPKIServiceServer) CreateEnvCA(context.Context, *CreateEnvCARequest) (*CreateEnvCAResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateEnvCA not implemented")
 }
 func (UnimplementedPKIServiceServer) IssueMemberCert(context.Context, *IssueMemberCertRequest) (*IssueMemberCertResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method IssueMemberCert not implemented")
@@ -218,6 +234,24 @@ func _PKIService_CreateOrgCA_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PKIServiceServer).CreateOrgCA(ctx, req.(*CreateOrgCARequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PKIService_CreateEnvCA_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateEnvCARequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PKIServiceServer).CreateEnvCA(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PKIService_CreateEnvCA_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PKIServiceServer).CreateEnvCA(ctx, req.(*CreateEnvCARequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -358,6 +392,10 @@ var PKIService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateOrgCA",
 			Handler:    _PKIService_CreateOrgCA_Handler,
+		},
+		{
+			MethodName: "CreateEnvCA",
+			Handler:    _PKIService_CreateEnvCA_Handler,
 		},
 		{
 			MethodName: "IssueMemberCert",

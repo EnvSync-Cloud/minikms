@@ -125,6 +125,118 @@ func (x *CreateOrgCAResponse) GetSerialHex() string {
 	return ""
 }
 
+type CreateEnvCARequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OrgId         string                 `protobuf:"bytes,1,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
+	EnvId         string                 `protobuf:"bytes,2,opt,name=env_id,json=envId,proto3" json:"env_id,omitempty"`
+	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateEnvCARequest) Reset() {
+	*x = CreateEnvCARequest{}
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateEnvCARequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateEnvCARequest) ProtoMessage() {}
+
+func (x *CreateEnvCARequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateEnvCARequest.ProtoReflect.Descriptor instead.
+func (*CreateEnvCARequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *CreateEnvCARequest) GetOrgId() string {
+	if x != nil {
+		return x.OrgId
+	}
+	return ""
+}
+
+func (x *CreateEnvCARequest) GetEnvId() string {
+	if x != nil {
+		return x.EnvId
+	}
+	return ""
+}
+
+func (x *CreateEnvCARequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type CreateEnvCAResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CertPem       string                 `protobuf:"bytes,1,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`
+	SerialHex     string                 `protobuf:"bytes,2,opt,name=serial_hex,json=serialHex,proto3" json:"serial_hex,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateEnvCAResponse) Reset() {
+	*x = CreateEnvCAResponse{}
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateEnvCAResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateEnvCAResponse) ProtoMessage() {}
+
+func (x *CreateEnvCAResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateEnvCAResponse.ProtoReflect.Descriptor instead.
+func (*CreateEnvCAResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *CreateEnvCAResponse) GetCertPem() string {
+	if x != nil {
+		return x.CertPem
+	}
+	return ""
+}
+
+func (x *CreateEnvCAResponse) GetSerialHex() string {
+	if x != nil {
+		return x.SerialHex
+	}
+	return ""
+}
+
 type IssueMemberCertRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MemberId      string                 `protobuf:"bytes,1,opt,name=member_id,json=memberId,proto3" json:"member_id,omitempty"`
@@ -137,7 +249,7 @@ type IssueMemberCertRequest struct {
 
 func (x *IssueMemberCertRequest) Reset() {
 	*x = IssueMemberCertRequest{}
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[2]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -149,7 +261,7 @@ func (x *IssueMemberCertRequest) String() string {
 func (*IssueMemberCertRequest) ProtoMessage() {}
 
 func (x *IssueMemberCertRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[2]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -162,7 +274,7 @@ func (x *IssueMemberCertRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueMemberCertRequest.ProtoReflect.Descriptor instead.
 func (*IssueMemberCertRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{2}
+	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *IssueMemberCertRequest) GetMemberId() string {
@@ -204,7 +316,7 @@ type IssueMemberCertResponse struct {
 
 func (x *IssueMemberCertResponse) Reset() {
 	*x = IssueMemberCertResponse{}
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[3]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -216,7 +328,7 @@ func (x *IssueMemberCertResponse) String() string {
 func (*IssueMemberCertResponse) ProtoMessage() {}
 
 func (x *IssueMemberCertResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[3]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -229,7 +341,7 @@ func (x *IssueMemberCertResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueMemberCertResponse.ProtoReflect.Descriptor instead.
 func (*IssueMemberCertResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{3}
+	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *IssueMemberCertResponse) GetCertPem() string {
@@ -260,13 +372,14 @@ type IssueLeafCertRequest struct {
 	DnsSans       []string               `protobuf:"bytes,3,rep,name=dns_sans,json=dnsSans,proto3" json:"dns_sans,omitempty"`
 	TtlDays       int32                  `protobuf:"varint,4,opt,name=ttl_days,json=ttlDays,proto3" json:"ttl_days,omitempty"`
 	KeyAlgorithm  string                 `protobuf:"bytes,5,opt,name=key_algorithm,json=keyAlgorithm,proto3" json:"key_algorithm,omitempty"` // RSA_2048 | ECDSA_P256
+	EnvId         string                 `protobuf:"bytes,6,opt,name=env_id,json=envId,proto3" json:"env_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *IssueLeafCertRequest) Reset() {
 	*x = IssueLeafCertRequest{}
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[4]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -278,7 +391,7 @@ func (x *IssueLeafCertRequest) String() string {
 func (*IssueLeafCertRequest) ProtoMessage() {}
 
 func (x *IssueLeafCertRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[4]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -291,7 +404,7 @@ func (x *IssueLeafCertRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueLeafCertRequest.ProtoReflect.Descriptor instead.
 func (*IssueLeafCertRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{4}
+	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *IssueLeafCertRequest) GetOrgId() string {
@@ -329,6 +442,13 @@ func (x *IssueLeafCertRequest) GetKeyAlgorithm() string {
 	return ""
 }
 
+func (x *IssueLeafCertRequest) GetEnvId() string {
+	if x != nil {
+		return x.EnvId
+	}
+	return ""
+}
+
 type IssueLeafCertResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CertPem       string                 `protobuf:"bytes,1,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`
@@ -340,7 +460,7 @@ type IssueLeafCertResponse struct {
 
 func (x *IssueLeafCertResponse) Reset() {
 	*x = IssueLeafCertResponse{}
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[5]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -352,7 +472,7 @@ func (x *IssueLeafCertResponse) String() string {
 func (*IssueLeafCertResponse) ProtoMessage() {}
 
 func (x *IssueLeafCertResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[5]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -365,7 +485,7 @@ func (x *IssueLeafCertResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueLeafCertResponse.ProtoReflect.Descriptor instead.
 func (*IssueLeafCertResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{5}
+	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *IssueLeafCertResponse) GetCertPem() string {
@@ -394,13 +514,14 @@ type SignCSRRequest struct {
 	OrgId         string                 `protobuf:"bytes,1,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
 	CsrPem        string                 `protobuf:"bytes,2,opt,name=csr_pem,json=csrPem,proto3" json:"csr_pem,omitempty"`
 	TtlDays       int32                  `protobuf:"varint,3,opt,name=ttl_days,json=ttlDays,proto3" json:"ttl_days,omitempty"`
+	EnvId         string                 `protobuf:"bytes,4,opt,name=env_id,json=envId,proto3" json:"env_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SignCSRRequest) Reset() {
 	*x = SignCSRRequest{}
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[6]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -412,7 +533,7 @@ func (x *SignCSRRequest) String() string {
 func (*SignCSRRequest) ProtoMessage() {}
 
 func (x *SignCSRRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[6]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -425,7 +546,7 @@ func (x *SignCSRRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignCSRRequest.ProtoReflect.Descriptor instead.
 func (*SignCSRRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{6}
+	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *SignCSRRequest) GetOrgId() string {
@@ -449,6 +570,13 @@ func (x *SignCSRRequest) GetTtlDays() int32 {
 	return 0
 }
 
+func (x *SignCSRRequest) GetEnvId() string {
+	if x != nil {
+		return x.EnvId
+	}
+	return ""
+}
+
 type SignCSRResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CertPem       string                 `protobuf:"bytes,1,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`
@@ -459,7 +587,7 @@ type SignCSRResponse struct {
 
 func (x *SignCSRResponse) Reset() {
 	*x = SignCSRResponse{}
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[7]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -471,7 +599,7 @@ func (x *SignCSRResponse) String() string {
 func (*SignCSRResponse) ProtoMessage() {}
 
 func (x *SignCSRResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[7]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -484,7 +612,7 @@ func (x *SignCSRResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignCSRResponse.ProtoReflect.Descriptor instead.
 func (*SignCSRResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{7}
+	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *SignCSRResponse) GetCertPem() string {
@@ -512,7 +640,7 @@ type RevokeCertRequest struct {
 
 func (x *RevokeCertRequest) Reset() {
 	*x = RevokeCertRequest{}
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[8]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -524,7 +652,7 @@ func (x *RevokeCertRequest) String() string {
 func (*RevokeCertRequest) ProtoMessage() {}
 
 func (x *RevokeCertRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[8]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -537,7 +665,7 @@ func (x *RevokeCertRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeCertRequest.ProtoReflect.Descriptor instead.
 func (*RevokeCertRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{8}
+	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RevokeCertRequest) GetSerialHex() string {
@@ -570,7 +698,7 @@ type RevokeCertResponse struct {
 
 func (x *RevokeCertResponse) Reset() {
 	*x = RevokeCertResponse{}
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[9]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -582,7 +710,7 @@ func (x *RevokeCertResponse) String() string {
 func (*RevokeCertResponse) ProtoMessage() {}
 
 func (x *RevokeCertResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[9]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -595,7 +723,7 @@ func (x *RevokeCertResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeCertResponse.ProtoReflect.Descriptor instead.
 func (*RevokeCertResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{9}
+	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RevokeCertResponse) GetSuccess() bool {
@@ -615,7 +743,7 @@ type GetCRLRequest struct {
 
 func (x *GetCRLRequest) Reset() {
 	*x = GetCRLRequest{}
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[10]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -627,7 +755,7 @@ func (x *GetCRLRequest) String() string {
 func (*GetCRLRequest) ProtoMessage() {}
 
 func (x *GetCRLRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[10]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -640,7 +768,7 @@ func (x *GetCRLRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCRLRequest.ProtoReflect.Descriptor instead.
 func (*GetCRLRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{10}
+	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *GetCRLRequest) GetOrgId() string {
@@ -668,7 +796,7 @@ type GetCRLResponse struct {
 
 func (x *GetCRLResponse) Reset() {
 	*x = GetCRLResponse{}
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[11]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -680,7 +808,7 @@ func (x *GetCRLResponse) String() string {
 func (*GetCRLResponse) ProtoMessage() {}
 
 func (x *GetCRLResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[11]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -693,7 +821,7 @@ func (x *GetCRLResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCRLResponse.ProtoReflect.Descriptor instead.
 func (*GetCRLResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{11}
+	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *GetCRLResponse) GetCrlDer() []byte {
@@ -727,7 +855,7 @@ type CheckOCSPRequest struct {
 
 func (x *CheckOCSPRequest) Reset() {
 	*x = CheckOCSPRequest{}
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[12]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -739,7 +867,7 @@ func (x *CheckOCSPRequest) String() string {
 func (*CheckOCSPRequest) ProtoMessage() {}
 
 func (x *CheckOCSPRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[12]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -752,7 +880,7 @@ func (x *CheckOCSPRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckOCSPRequest.ProtoReflect.Descriptor instead.
 func (*CheckOCSPRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{12}
+	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *CheckOCSPRequest) GetSerialHex() string {
@@ -779,7 +907,7 @@ type CheckOCSPResponse struct {
 
 func (x *CheckOCSPResponse) Reset() {
 	*x = CheckOCSPResponse{}
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[13]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -791,7 +919,7 @@ func (x *CheckOCSPResponse) String() string {
 func (*CheckOCSPResponse) ProtoMessage() {}
 
 func (x *CheckOCSPResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[13]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -804,7 +932,7 @@ func (x *CheckOCSPResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckOCSPResponse.ProtoReflect.Descriptor instead.
 func (*CheckOCSPResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{13}
+	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *CheckOCSPResponse) GetStatus() int32 {
@@ -829,7 +957,7 @@ type GetRootCARequest struct {
 
 func (x *GetRootCARequest) Reset() {
 	*x = GetRootCARequest{}
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[14]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -841,7 +969,7 @@ func (x *GetRootCARequest) String() string {
 func (*GetRootCARequest) ProtoMessage() {}
 
 func (x *GetRootCARequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[14]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -854,7 +982,7 @@ func (x *GetRootCARequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRootCARequest.ProtoReflect.Descriptor instead.
 func (*GetRootCARequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{14}
+	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{16}
 }
 
 type GetRootCAResponse struct {
@@ -866,7 +994,7 @@ type GetRootCAResponse struct {
 
 func (x *GetRootCAResponse) Reset() {
 	*x = GetRootCAResponse{}
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[15]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -878,7 +1006,7 @@ func (x *GetRootCAResponse) String() string {
 func (*GetRootCAResponse) ProtoMessage() {}
 
 func (x *GetRootCAResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[15]
+	mi := &file_api_proto_minikms_v1_pki_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -891,7 +1019,7 @@ func (x *GetRootCAResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRootCAResponse.ProtoReflect.Descriptor instead.
 func (*GetRootCAResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{15}
+	return file_api_proto_minikms_v1_pki_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *GetRootCAResponse) GetCertPem() string {
@@ -913,6 +1041,14 @@ const file_api_proto_minikms_v1_pki_proto_rawDesc = "" +
 	"\x13CreateOrgCAResponse\x12\x19\n" +
 	"\bcert_pem\x18\x01 \x01(\tR\acertPem\x12\x1d\n" +
 	"\n" +
+	"serial_hex\x18\x02 \x01(\tR\tserialHex\"V\n" +
+	"\x12CreateEnvCARequest\x12\x15\n" +
+	"\x06org_id\x18\x01 \x01(\tR\x05orgId\x12\x15\n" +
+	"\x06env_id\x18\x02 \x01(\tR\x05envId\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\"O\n" +
+	"\x13CreateEnvCAResponse\x12\x19\n" +
+	"\bcert_pem\x18\x01 \x01(\tR\acertPem\x12\x1d\n" +
+	"\n" +
 	"serial_hex\x18\x02 \x01(\tR\tserialHex\"\x83\x01\n" +
 	"\x16IssueMemberCertRequest\x12\x1b\n" +
 	"\tmember_id\x18\x01 \x01(\tR\bmemberId\x12!\n" +
@@ -923,23 +1059,25 @@ const file_api_proto_minikms_v1_pki_proto_rawDesc = "" +
 	"\bcert_pem\x18\x01 \x01(\tR\acertPem\x12\x17\n" +
 	"\akey_pem\x18\x02 \x01(\tR\x06keyPem\x12\x1d\n" +
 	"\n" +
-	"serial_hex\x18\x03 \x01(\tR\tserialHex\"\xa9\x01\n" +
+	"serial_hex\x18\x03 \x01(\tR\tserialHex\"\xc0\x01\n" +
 	"\x14IssueLeafCertRequest\x12\x15\n" +
 	"\x06org_id\x18\x01 \x01(\tR\x05orgId\x12\x1f\n" +
 	"\vcommon_name\x18\x02 \x01(\tR\n" +
 	"commonName\x12\x19\n" +
 	"\bdns_sans\x18\x03 \x03(\tR\adnsSans\x12\x19\n" +
 	"\bttl_days\x18\x04 \x01(\x05R\attlDays\x12#\n" +
-	"\rkey_algorithm\x18\x05 \x01(\tR\fkeyAlgorithm\"j\n" +
+	"\rkey_algorithm\x18\x05 \x01(\tR\fkeyAlgorithm\x12\x15\n" +
+	"\x06env_id\x18\x06 \x01(\tR\x05envId\"j\n" +
 	"\x15IssueLeafCertResponse\x12\x19\n" +
 	"\bcert_pem\x18\x01 \x01(\tR\acertPem\x12\x17\n" +
 	"\akey_pem\x18\x02 \x01(\tR\x06keyPem\x12\x1d\n" +
 	"\n" +
-	"serial_hex\x18\x03 \x01(\tR\tserialHex\"[\n" +
+	"serial_hex\x18\x03 \x01(\tR\tserialHex\"r\n" +
 	"\x0eSignCSRRequest\x12\x15\n" +
 	"\x06org_id\x18\x01 \x01(\tR\x05orgId\x12\x17\n" +
 	"\acsr_pem\x18\x02 \x01(\tR\x06csrPem\x12\x19\n" +
-	"\bttl_days\x18\x03 \x01(\x05R\attlDays\"K\n" +
+	"\bttl_days\x18\x03 \x01(\x05R\attlDays\x12\x15\n" +
+	"\x06env_id\x18\x04 \x01(\tR\x05envId\"K\n" +
 	"\x0fSignCSRResponse\x12\x19\n" +
 	"\bcert_pem\x18\x01 \x01(\tR\acertPem\x12\x1d\n" +
 	"\n" +
@@ -970,10 +1108,11 @@ const file_api_proto_minikms_v1_pki_proto_rawDesc = "" +
 	"revoked_at\x18\x02 \x01(\tR\trevokedAt\"\x12\n" +
 	"\x10GetRootCARequest\".\n" +
 	"\x11GetRootCAResponse\x12\x19\n" +
-	"\bcert_pem\x18\x01 \x01(\tR\acertPem2\xf4\x04\n" +
+	"\bcert_pem\x18\x01 \x01(\tR\acertPem2\xc4\x05\n" +
 	"\n" +
 	"PKIService\x12N\n" +
-	"\vCreateOrgCA\x12\x1e.minikms.v1.CreateOrgCARequest\x1a\x1f.minikms.v1.CreateOrgCAResponse\x12Z\n" +
+	"\vCreateOrgCA\x12\x1e.minikms.v1.CreateOrgCARequest\x1a\x1f.minikms.v1.CreateOrgCAResponse\x12N\n" +
+	"\vCreateEnvCA\x12\x1e.minikms.v1.CreateEnvCARequest\x1a\x1f.minikms.v1.CreateEnvCAResponse\x12Z\n" +
 	"\x0fIssueMemberCert\x12\".minikms.v1.IssueMemberCertRequest\x1a#.minikms.v1.IssueMemberCertResponse\x12T\n" +
 	"\rIssueLeafCert\x12 .minikms.v1.IssueLeafCertRequest\x1a!.minikms.v1.IssueLeafCertResponse\x12B\n" +
 	"\aSignCSR\x12\x1a.minikms.v1.SignCSRRequest\x1a\x1b.minikms.v1.SignCSRResponse\x12K\n" +
@@ -995,44 +1134,48 @@ func file_api_proto_minikms_v1_pki_proto_rawDescGZIP() []byte {
 	return file_api_proto_minikms_v1_pki_proto_rawDescData
 }
 
-var file_api_proto_minikms_v1_pki_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_api_proto_minikms_v1_pki_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_api_proto_minikms_v1_pki_proto_goTypes = []any{
 	(*CreateOrgCARequest)(nil),      // 0: minikms.v1.CreateOrgCARequest
 	(*CreateOrgCAResponse)(nil),     // 1: minikms.v1.CreateOrgCAResponse
-	(*IssueMemberCertRequest)(nil),  // 2: minikms.v1.IssueMemberCertRequest
-	(*IssueMemberCertResponse)(nil), // 3: minikms.v1.IssueMemberCertResponse
-	(*IssueLeafCertRequest)(nil),    // 4: minikms.v1.IssueLeafCertRequest
-	(*IssueLeafCertResponse)(nil),   // 5: minikms.v1.IssueLeafCertResponse
-	(*SignCSRRequest)(nil),          // 6: minikms.v1.SignCSRRequest
-	(*SignCSRResponse)(nil),         // 7: minikms.v1.SignCSRResponse
-	(*RevokeCertRequest)(nil),       // 8: minikms.v1.RevokeCertRequest
-	(*RevokeCertResponse)(nil),      // 9: minikms.v1.RevokeCertResponse
-	(*GetCRLRequest)(nil),           // 10: minikms.v1.GetCRLRequest
-	(*GetCRLResponse)(nil),          // 11: minikms.v1.GetCRLResponse
-	(*CheckOCSPRequest)(nil),        // 12: minikms.v1.CheckOCSPRequest
-	(*CheckOCSPResponse)(nil),       // 13: minikms.v1.CheckOCSPResponse
-	(*GetRootCARequest)(nil),        // 14: minikms.v1.GetRootCARequest
-	(*GetRootCAResponse)(nil),       // 15: minikms.v1.GetRootCAResponse
+	(*CreateEnvCARequest)(nil),      // 2: minikms.v1.CreateEnvCARequest
+	(*CreateEnvCAResponse)(nil),     // 3: minikms.v1.CreateEnvCAResponse
+	(*IssueMemberCertRequest)(nil),  // 4: minikms.v1.IssueMemberCertRequest
+	(*IssueMemberCertResponse)(nil), // 5: minikms.v1.IssueMemberCertResponse
+	(*IssueLeafCertRequest)(nil),    // 6: minikms.v1.IssueLeafCertRequest
+	(*IssueLeafCertResponse)(nil),   // 7: minikms.v1.IssueLeafCertResponse
+	(*SignCSRRequest)(nil),          // 8: minikms.v1.SignCSRRequest
+	(*SignCSRResponse)(nil),         // 9: minikms.v1.SignCSRResponse
+	(*RevokeCertRequest)(nil),       // 10: minikms.v1.RevokeCertRequest
+	(*RevokeCertResponse)(nil),      // 11: minikms.v1.RevokeCertResponse
+	(*GetCRLRequest)(nil),           // 12: minikms.v1.GetCRLRequest
+	(*GetCRLResponse)(nil),          // 13: minikms.v1.GetCRLResponse
+	(*CheckOCSPRequest)(nil),        // 14: minikms.v1.CheckOCSPRequest
+	(*CheckOCSPResponse)(nil),       // 15: minikms.v1.CheckOCSPResponse
+	(*GetRootCARequest)(nil),        // 16: minikms.v1.GetRootCARequest
+	(*GetRootCAResponse)(nil),       // 17: minikms.v1.GetRootCAResponse
 }
 var file_api_proto_minikms_v1_pki_proto_depIdxs = []int32{
 	0,  // 0: minikms.v1.PKIService.CreateOrgCA:input_type -> minikms.v1.CreateOrgCARequest
-	2,  // 1: minikms.v1.PKIService.IssueMemberCert:input_type -> minikms.v1.IssueMemberCertRequest
-	4,  // 2: minikms.v1.PKIService.IssueLeafCert:input_type -> minikms.v1.IssueLeafCertRequest
-	6,  // 3: minikms.v1.PKIService.SignCSR:input_type -> minikms.v1.SignCSRRequest
-	8,  // 4: minikms.v1.PKIService.RevokeCert:input_type -> minikms.v1.RevokeCertRequest
-	10, // 5: minikms.v1.PKIService.GetCRL:input_type -> minikms.v1.GetCRLRequest
-	12, // 6: minikms.v1.PKIService.CheckOCSP:input_type -> minikms.v1.CheckOCSPRequest
-	14, // 7: minikms.v1.PKIService.GetRootCA:input_type -> minikms.v1.GetRootCARequest
-	1,  // 8: minikms.v1.PKIService.CreateOrgCA:output_type -> minikms.v1.CreateOrgCAResponse
-	3,  // 9: minikms.v1.PKIService.IssueMemberCert:output_type -> minikms.v1.IssueMemberCertResponse
-	5,  // 10: minikms.v1.PKIService.IssueLeafCert:output_type -> minikms.v1.IssueLeafCertResponse
-	7,  // 11: minikms.v1.PKIService.SignCSR:output_type -> minikms.v1.SignCSRResponse
-	9,  // 12: minikms.v1.PKIService.RevokeCert:output_type -> minikms.v1.RevokeCertResponse
-	11, // 13: minikms.v1.PKIService.GetCRL:output_type -> minikms.v1.GetCRLResponse
-	13, // 14: minikms.v1.PKIService.CheckOCSP:output_type -> minikms.v1.CheckOCSPResponse
-	15, // 15: minikms.v1.PKIService.GetRootCA:output_type -> minikms.v1.GetRootCAResponse
-	8,  // [8:16] is the sub-list for method output_type
-	0,  // [0:8] is the sub-list for method input_type
+	2,  // 1: minikms.v1.PKIService.CreateEnvCA:input_type -> minikms.v1.CreateEnvCARequest
+	4,  // 2: minikms.v1.PKIService.IssueMemberCert:input_type -> minikms.v1.IssueMemberCertRequest
+	6,  // 3: minikms.v1.PKIService.IssueLeafCert:input_type -> minikms.v1.IssueLeafCertRequest
+	8,  // 4: minikms.v1.PKIService.SignCSR:input_type -> minikms.v1.SignCSRRequest
+	10, // 5: minikms.v1.PKIService.RevokeCert:input_type -> minikms.v1.RevokeCertRequest
+	12, // 6: minikms.v1.PKIService.GetCRL:input_type -> minikms.v1.GetCRLRequest
+	14, // 7: minikms.v1.PKIService.CheckOCSP:input_type -> minikms.v1.CheckOCSPRequest
+	16, // 8: minikms.v1.PKIService.GetRootCA:input_type -> minikms.v1.GetRootCARequest
+	1,  // 9: minikms.v1.PKIService.CreateOrgCA:output_type -> minikms.v1.CreateOrgCAResponse
+	3,  // 10: minikms.v1.PKIService.CreateEnvCA:output_type -> minikms.v1.CreateEnvCAResponse
+	5,  // 11: minikms.v1.PKIService.IssueMemberCert:output_type -> minikms.v1.IssueMemberCertResponse
+	7,  // 12: minikms.v1.PKIService.IssueLeafCert:output_type -> minikms.v1.IssueLeafCertResponse
+	9,  // 13: minikms.v1.PKIService.SignCSR:output_type -> minikms.v1.SignCSRResponse
+	11, // 14: minikms.v1.PKIService.RevokeCert:output_type -> minikms.v1.RevokeCertResponse
+	13, // 15: minikms.v1.PKIService.GetCRL:output_type -> minikms.v1.GetCRLResponse
+	15, // 16: minikms.v1.PKIService.CheckOCSP:output_type -> minikms.v1.CheckOCSPResponse
+	17, // 17: minikms.v1.PKIService.GetRootCA:output_type -> minikms.v1.GetRootCAResponse
+	9,  // [9:18] is the sub-list for method output_type
+	0,  // [0:9] is the sub-list for method input_type
 	0,  // [0:0] is the sub-list for extension type_name
 	0,  // [0:0] is the sub-list for extension extendee
 	0,  // [0:0] is the sub-list for field type_name
@@ -1049,7 +1192,7 @@ func file_api_proto_minikms_v1_pki_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_minikms_v1_pki_proto_rawDesc), len(file_api_proto_minikms_v1_pki_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

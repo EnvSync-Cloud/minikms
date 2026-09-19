@@ -27,12 +27,9 @@ func TestCreateOrgIntermediateCA(t *testing.T) {
 		}
 	})
 
-	t.Run("MaxPathLen is 0", func(t *testing.T) {
-		if orgCert.MaxPathLen != 0 {
-			t.Errorf("MaxPathLen: got %d, want 0", orgCert.MaxPathLen)
-		}
-		if !orgCert.MaxPathLenZero {
-			t.Error("MaxPathLenZero should be true")
+	t.Run("MaxPathLen is 1", func(t *testing.T) {
+		if orgCert.MaxPathLen != 1 {
+			t.Errorf("MaxPathLen: got %d, want 1", orgCert.MaxPathLen)
 		}
 	})
 

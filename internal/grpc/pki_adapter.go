@@ -70,8 +70,16 @@ func (a *PKIAdapter) IssueMemberCert(ctx context.Context, req *pb.IssueMemberCer
 	}, nil
 }
 
+func (a *PKIAdapter) CreateEnvCA(ctx context.Context, req *pb.CreateEnvCARequest) (*pb.CreateEnvCAResponse, error) {
+	resp, err := a.pkiSvc.CreateEnvCA(ctx, req.OrgId, req.EnvId, req.Name)
+	if err != nil {
+		return nil, toStatusError(err)
+	}
+	return &pb.CreateEnvCAResponse{CertPem: resp.CertPEM, SerialHex: resp.SerialHex}, nil
+}
+
 func (a *PKIAdapter) IssueLeafCert(ctx context.Context, req *pb.IssueLeafCertRequest) (*pb.IssueLeafCertResponse, error) {
-	orgCACert, orgCAKey, err := a.pkiSvc.LoadOrgCA(ctx, req.OrgId)
+	orgCACert, orgCAKey, err := a.pkiSvc.LoadIssuingCA(ctx, req.OrgId, req.EnvId)
 	if err != nil {
 		return nil, toStatusError(err)
 	}
@@ -96,7 +104,7 @@ func (a *PKIAdapter) IssueLeafCert(ctx context.Context, req *pb.IssueLeafCertReq
 }
 
 func (a *PKIAdapter) SignCSR(ctx context.Context, req *pb.SignCSRRequest) (*pb.SignCSRResponse, error) {
-	orgCACert, orgCAKey, err := a.pkiSvc.LoadOrgCA(ctx, req.OrgId)
+	orgCACert, orgCAKey, err := a.pkiSvc.LoadIssuingCA(ctx, req.OrgId, req.EnvId)
 	if err != nil {
 		return nil, toStatusError(err)
 	}

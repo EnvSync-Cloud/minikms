@@ -440,7 +440,7 @@ func (m *MockPKICertStore) GetCertificateBySerialWithKey(_ context.Context, seri
 	return m.GetCertificateBySerial(context.Background(), serial)
 }
 
-func (m *MockPKICertStore) GetOrgCA(_ context.Context, orgID string) (*CertRecord, error) {
+func (m *MockPKICertStore) GetOrgCA(_ context.Context, orgID, envID string) (*CertRecord, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	rec, ok := m.orgCA[orgID]
