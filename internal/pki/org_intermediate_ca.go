@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/pem"
 	"time"
 )
 
@@ -96,4 +97,24 @@ func createIntermediateCA(
 	}
 
 	return cert, key, certDER, nil
+}
+
+// CreateOrgCACSR generates an org intermediate key and CSR for an offline root to sign.
+func CreateOrgCACSR(orgID, orgName string) (*ecdsa.PrivateKey, []byte, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject: pkix.Name{
+			CommonName:         orgName + " Intermediate CA",
+			Organization:       []string{"EnvSync"},
+			OrganizationalUnit: []string{orgID},
+		},
+	}, key)
+	if err != nil {
+		return nil, nil, err
+	}
+	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+	return key, csrPEM, nil
 }

@@ -19,7 +19,7 @@ import (
 // VaultStore abstracts the database operations needed by VaultService.
 type VaultStore interface {
 	// PKI cert lookups
-	GetOrgCA(ctx context.Context, orgID string) (*pkistore.CertRecord, error)
+	GetOrgCA(ctx context.Context, orgID, envID string) (*pkistore.CertRecord, error)
 	GetCertificateBySerialWithKey(ctx context.Context, serialNumber string) (*pkistore.CertRecord, error)
 
 	// Org CA wrap lookups
@@ -435,7 +435,7 @@ func (v *VaultService) History(ctx context.Context, sessionToken string, req *Va
 // getOrgCAPublicKey retrieves the Org CA's public key from the certificates table.
 // The public key is always available (stored in the cert) — no session needed for encrypt.
 func (v *VaultService) getOrgCAPublicKey(ctx context.Context, orgID string) (*ecdsa.PublicKey, error) {
-	certRecord, err := v.vaultStore.GetOrgCA(ctx, orgID)
+	certRecord, err := v.vaultStore.GetOrgCA(ctx, orgID, "")
 	if err != nil {
 		return nil, internalError("failed to get Org CA certificate", err)
 	}

@@ -451,6 +451,36 @@ func (m *MockPKICertStore) GetOrgCA(_ context.Context, orgID, envID string) (*Ce
 	return &cp, nil
 }
 
+func (m *MockPKICertStore) GetPendingOrgCA(_ context.Context, orgID string) (*CertRecord, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, rec := range m.certs {
+		if rec.OrgID == orgID && rec.CertType == "org_intermediate_ca" && rec.Status == "pending" && rec.EnvID == "" {
+			cp := *rec
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *MockPKICertStore) ActivatePendingOrgCA(_ context.Context, orgID, newSerial, certPEM string, encryptedKey []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for serial, rec := range m.certs {
+		if rec.OrgID == orgID && rec.CertType == "org_intermediate_ca" && rec.Status == "pending" {
+			delete(m.certs, serial)
+			rec.SerialNumber = newSerial
+			rec.CertPEM = certPEM
+			rec.EncryptedPrivateKey = encryptedKey
+			rec.Status = "active"
+			m.certs[newSerial] = rec
+			m.orgCA[orgID] = rec
+			return nil
+		}
+	}
+	return fmt.Errorf("pending org CA not found")
+}
+
 func (m *MockPKICertStore) UpdateCertificateStatus(_ context.Context, serial, status string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

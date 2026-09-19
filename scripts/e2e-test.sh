@@ -21,6 +21,9 @@ psql -v ON_ERROR_STOP=1 "$MINIKMS_DB_URL" -f "$PROJECT_DIR/migrations/001_initia
 psql -v ON_ERROR_STOP=1 "$MINIKMS_DB_URL" -f "$PROJECT_DIR/migrations/002_vault_storage.sql"
 psql -v ON_ERROR_STOP=1 "$MINIKMS_DB_URL" -f "$PROJECT_DIR/migrations/003_escrow_recovery.sql"
 psql -v ON_ERROR_STOP=1 "$MINIKMS_DB_URL" -f "$PROJECT_DIR/migrations/004_multi_replica_ha.sql"
+psql -v ON_ERROR_STOP=1 "$MINIKMS_DB_URL" -f "$PROJECT_DIR/migrations/005_leaf_cert_type.sql"
+psql -v ON_ERROR_STOP=1 "$MINIKMS_DB_URL" -f "$PROJECT_DIR/migrations/006_env_ca.sql"
+psql -v ON_ERROR_STOP=1 "$MINIKMS_DB_URL" -f "$PROJECT_DIR/migrations/007_pending_org_ca.sql"
 
 echo "Running E2E tests..."
 export MINIKMS_REDIS_URL="redis://localhost:6380/0"

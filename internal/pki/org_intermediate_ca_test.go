@@ -1,9 +1,12 @@
 package pki
 
 import (
+	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/asn1"
+	"encoding/pem"
 	"testing"
 	"time"
 )
@@ -86,4 +89,51 @@ func TestCreateOrgIntermediateCA(t *testing.T) {
 			t.Error("DER roundtrip CN mismatch")
 		}
 	})
+}
+
+func TestCreateOrgCACSR_SignedByOfflineRoot(t *testing.T) {
+	rootCert, rootKey, _, err := CreateRootCA("Offline Root", 10*365*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, csrPEM, err := CreateOrgCACSR("org-1", "Acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(csrPEM)
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := csr.CheckSignature(); err != nil {
+		t.Fatal(err)
+	}
+	serial, err := generateSerialNumber()
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               csr.Subject,
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            1,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, rootCert, csr.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cert.CheckSignatureFrom(rootCert); err != nil {
+		t.Fatal(err)
+	}
+	if !cert.PublicKey.(*ecdsa.PublicKey).Equal(&key.PublicKey) {
+		t.Fatal("installed cert key mismatch")
+	}
 }

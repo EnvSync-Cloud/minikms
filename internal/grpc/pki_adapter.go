@@ -39,6 +39,22 @@ func (a *PKIAdapter) CreateOrgCA(ctx context.Context, req *pb.CreateOrgCARequest
 	}, nil
 }
 
+func (a *PKIAdapter) CreateOrgCACSR(ctx context.Context, req *pb.CreateOrgCACSRRequest) (*pb.CreateOrgCACSRResponse, error) {
+	csr, err := a.pkiSvc.CreateOrgCACSR(ctx, req.OrgId, req.OrgName)
+	if err != nil {
+		return nil, toStatusError(err)
+	}
+	return &pb.CreateOrgCACSRResponse{CsrPem: csr}, nil
+}
+
+func (a *PKIAdapter) InstallOrgCA(ctx context.Context, req *pb.InstallOrgCARequest) (*pb.CreateOrgCAResponse, error) {
+	resp, err := a.pkiSvc.InstallOrgCA(ctx, req.OrgId, req.CertPem, req.ChainPem)
+	if err != nil {
+		return nil, toStatusError(err)
+	}
+	return &pb.CreateOrgCAResponse{CertPem: resp.CertPEM, SerialHex: resp.SerialHex}, nil
+}
+
 func (a *PKIAdapter) IssueMemberCert(ctx context.Context, req *pb.IssueMemberCertRequest) (*pb.IssueMemberCertResponse, error) {
 	orgCACert, orgCAKey, err := a.pkiSvc.LoadOrgCA(ctx, req.OrgId)
 	if err != nil {

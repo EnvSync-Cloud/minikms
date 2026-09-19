@@ -37,6 +37,8 @@ type Store interface {
 	GetCertificateBySerial(ctx context.Context, serialNumber string) (*CertRecord, error)
 	GetCertificateBySerialWithKey(ctx context.Context, serialNumber string) (*CertRecord, error)
 	GetOrgCA(ctx context.Context, orgID, envID string) (*CertRecord, error)
+	GetPendingOrgCA(ctx context.Context, orgID string) (*CertRecord, error)
+	ActivatePendingOrgCA(ctx context.Context, orgID, newSerial, certPEM string, encryptedKey []byte) error
 	UpdateCertificateStatus(ctx context.Context, serialNumber, status string) error
 	InsertCRLEntry(ctx context.Context, entry *CRLEntryRecord) error
 	GetCRLEntries(ctx context.Context, issuerSerial string) ([]CRLEntryRecord, error)

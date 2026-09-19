@@ -119,6 +119,14 @@ func (m *mockCertStore) GetOrgCA(_ context.Context, orgID, envID string) (*pkist
 	return &cp, nil
 }
 
+func (m *mockCertStore) GetPendingOrgCA(_ context.Context, orgID string) (*pkistore.CertRecord, error) {
+	return nil, nil
+}
+
+func (m *mockCertStore) ActivatePendingOrgCA(_ context.Context, orgID, newSerial, certPEM string, encryptedKey []byte) error {
+	return nil
+}
+
 func (m *mockCertStore) UpdateCertificateStatus(_ context.Context, serial, status string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
