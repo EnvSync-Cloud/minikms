@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -26,7 +27,7 @@ func leafValidity(ttl time.Duration) time.Duration {
 	return ttl
 }
 
-func splitSANs(sans []string) (dns []string, ips []net.IP) {
+func splitSANs(sans []string) (dns []string, ips []net.IP, uris []*url.URL) {
 	for _, raw := range sans {
 		value := strings.TrimSpace(raw)
 		if value == "" {
@@ -36,9 +37,15 @@ func splitSANs(sans []string) (dns []string, ips []net.IP) {
 			ips = append(ips, ip)
 			continue
 		}
+		if strings.Contains(value, "://") {
+			if parsed, err := url.Parse(value); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+				uris = append(uris, parsed)
+				continue
+			}
+		}
 		dns = append(dns, value)
 	}
-	return dns, ips
+	return dns, ips, uris
 }
 
 func generateLeafKey(algorithm string) (crypto.Signer, error) {
@@ -80,8 +87,8 @@ func CreateLeafCertificate(
 		return nil, nil, nil, err
 	}
 
-	dns, ips := splitSANs(dnsSans)
-	if commonName != "" && net.ParseIP(commonName) == nil {
+	dns, ips, uris := splitSANs(dnsSans)
+	if commonName != "" && net.ParseIP(commonName) == nil && !strings.Contains(commonName, "://") {
 		found := false
 		for _, name := range dns {
 			if name == commonName {
@@ -103,6 +110,7 @@ func CreateLeafCertificate(
 		},
 		DNSNames:              dns,
 		IPAddresses:           ips,
+		URIs:                  uris,
 		NotBefore:             now,
 		NotAfter:              now.Add(leafValidity(validFor)),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,

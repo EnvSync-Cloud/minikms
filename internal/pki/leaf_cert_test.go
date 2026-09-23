@@ -65,6 +65,56 @@ func TestCreateLeafCertificate(t *testing.T) {
 	}
 }
 
+func TestCreateLeafCertificate_SPIFFEURI(t *testing.T) {
+	rootCert, rootKey, _, err := CreateRootCA("Test Root CA", 10*365*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orgCert, orgKey, _, err := CreateOrgIntermediateCA("org-123", "Test Org", rootCert, rootKey, 5*365*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uri := "spiffe://acme.internal/ns/api"
+	cert, _, _, err := CreateLeafCertificate("api.internal", []string{uri}, orgCert, orgKey, 0, "ECDSA_P256", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cert.URIs) != 1 || cert.URIs[0].String() != uri {
+		t.Fatalf("URI SAN: %v", cert.URIs)
+	}
+}
+
+func TestCreateEnvIntermediateCA(t *testing.T) {
+	rootCert, rootKey, _, err := CreateRootCA("Test Root CA", 10*365*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orgCert, orgKey, _, err := CreateOrgIntermediateCA("org-123", "Test Org", rootCert, rootKey, 5*365*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orgCert.MaxPathLen != 1 {
+		t.Fatalf("org CA MaxPathLen = %d, want 1", orgCert.MaxPathLen)
+	}
+	envCert, envKey, _, err := CreateEnvIntermediateCA("org-123", "env-prod", "Prod CA", orgCert, orgKey, 365*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envCert.MaxPathLen != 0 || !envCert.MaxPathLenZero {
+		t.Fatalf("env CA should be pathlen 0")
+	}
+	if err := envCert.CheckSignatureFrom(orgCert); err != nil {
+		t.Fatal(err)
+	}
+	leaf, _, _, err := CreateLeafCertificate("api.internal", nil, envCert, envKey, 0, "ECDSA_P256", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := leaf.CheckSignatureFrom(envCert); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSignLeafCSR(t *testing.T) {
 	rootCert, rootKey, _, err := CreateRootCA("Test Root CA", 10*365*24*time.Hour)
 	if err != nil {

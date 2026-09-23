@@ -778,7 +778,7 @@ func TestCreateOrgCAFull_Stored(t *testing.T) {
 	}
 
 	// Verify stored in cert store
-	rec, _ := certStore.GetOrgCA(ctx, "org-001")
+	rec, _ := certStore.GetOrgCA(ctx, "org-001", "")
 	if rec == nil {
 		t.Fatal("org CA should be stored")
 	}

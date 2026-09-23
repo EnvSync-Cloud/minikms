@@ -48,7 +48,7 @@ func (m *mockVaultStore) entryKey(orgID, scopeID, entryType, key string, envType
 	return fmt.Sprintf("%s:%s:%s:%s:%s:%d", orgID, scopeID, entryType, key, env, version)
 }
 
-func (m *mockVaultStore) GetOrgCA(_ context.Context, orgID string) (*pkistore.CertRecord, error) {
+func (m *mockVaultStore) GetOrgCA(_ context.Context, orgID, envID string) (*pkistore.CertRecord, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	rec, ok := m.orgCerts[orgID]

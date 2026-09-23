@@ -92,7 +92,10 @@ services:
         psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/001_initial_schema.sql &&
         psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/002_vault_storage.sql &&
         psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/003_escrow_recovery.sql &&
-        psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/004_multi_replica_ha.sql
+        psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/004_multi_replica_ha.sql &&
+        psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/005_leaf_cert_type.sql &&
+        psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/006_env_ca.sql &&
+        psql -h postgres-test -U minikms_test -d minikms_test -f /migrations/007_pending_org_ca.sql
 
   minikms-1:
     <<: *minikms-service

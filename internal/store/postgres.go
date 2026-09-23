@@ -403,9 +403,9 @@ func (s *PostgresStore) GetCertificateBySerial(ctx context.Context, serialNumber
 func (s *PostgresStore) StoreCertificateWithKey(ctx context.Context, rec *pkistore.CertRecord) error {
 	rec.ID = uuid.New().String()
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO certificates (id, serial_number, cert_type, org_id, subject_cn, cert_pem, encrypted_private_key, status, issued_at, expires_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		rec.ID, rec.SerialNumber, rec.CertType, rec.OrgID, rec.SubjectCN, rec.CertPEM,
+		`INSERT INTO certificates (id, serial_number, cert_type, org_id, env_id, subject_cn, cert_pem, encrypted_private_key, status, issued_at, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		rec.ID, rec.SerialNumber, rec.CertType, rec.OrgID, nullIfEmpty(rec.EnvID), rec.SubjectCN, rec.CertPEM,
 		rec.EncryptedPrivateKey, rec.Status, rec.IssuedAt, rec.ExpiresAt)
 	return err
 }
@@ -427,15 +427,29 @@ func (s *PostgresStore) GetCertificateBySerialWithKey(ctx context.Context, seria
 	return &r, nil
 }
 
-func (s *PostgresStore) GetOrgCA(ctx context.Context, orgID string) (*pkistore.CertRecord, error) {
-	row := s.pool.QueryRow(ctx,
-		`SELECT id, serial_number, cert_type, org_id, subject_cn, cert_pem, encrypted_private_key, status, issued_at, expires_at
+func nullIfEmpty(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func (s *PostgresStore) GetOrgCA(ctx context.Context, orgID, envID string) (*pkistore.CertRecord, error) {
+	query := `SELECT id, serial_number, cert_type, org_id, COALESCE(env_id, ''), subject_cn, cert_pem, encrypted_private_key, status, issued_at, expires_at
 		 FROM certificates
-		 WHERE org_id = $1 AND cert_type = 'org_intermediate_ca' AND status = 'active'
-		 ORDER BY created_at DESC LIMIT 1`, orgID)
+		 WHERE org_id = $1 AND cert_type = 'org_intermediate_ca' AND status = 'active'`
+	args := []any{orgID}
+	if envID == "" {
+		query += ` AND env_id IS NULL`
+	} else {
+		query += ` AND env_id = $2`
+		args = append(args, envID)
+	}
+	query += ` ORDER BY created_at DESC LIMIT 1`
+	row := s.pool.QueryRow(ctx, query, args...)
 
 	var r pkistore.CertRecord
-	err := row.Scan(&r.ID, &r.SerialNumber, &r.CertType, &r.OrgID, &r.SubjectCN, &r.CertPEM,
+	err := row.Scan(&r.ID, &r.SerialNumber, &r.CertType, &r.OrgID, &r.EnvID, &r.SubjectCN, &r.CertPEM,
 		&r.EncryptedPrivateKey, &r.Status, &r.IssuedAt, &r.ExpiresAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -471,6 +485,33 @@ func (s *PostgresStore) AcquireOrgCABootstrapLock(ctx context.Context, orgID str
 		})
 	}
 	return release, nil
+}
+
+func (s *PostgresStore) GetPendingOrgCA(ctx context.Context, orgID string) (*pkistore.CertRecord, error) {
+	row := s.pool.QueryRow(ctx,
+		`SELECT id, serial_number, cert_type, org_id, COALESCE(env_id, ''), subject_cn, cert_pem, encrypted_private_key, status, issued_at, expires_at
+		 FROM certificates
+		 WHERE org_id = $1 AND cert_type = 'org_intermediate_ca' AND status = 'pending' AND env_id IS NULL
+		 ORDER BY created_at DESC LIMIT 1`, orgID)
+	var r pkistore.CertRecord
+	err := row.Scan(&r.ID, &r.SerialNumber, &r.CertType, &r.OrgID, &r.EnvID, &r.SubjectCN, &r.CertPEM,
+		&r.EncryptedPrivateKey, &r.Status, &r.IssuedAt, &r.ExpiresAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+func (s *PostgresStore) ActivatePendingOrgCA(ctx context.Context, orgID, newSerial, certPEM string, encryptedKey []byte) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE certificates
+		 SET serial_number = $1, cert_pem = $2, encrypted_private_key = $3, status = 'active'
+		 WHERE org_id = $4 AND cert_type = 'org_intermediate_ca' AND status = 'pending' AND env_id IS NULL`,
+		newSerial, certPEM, encryptedKey, orgID)
+	return err
 }
 
 func (s *PostgresStore) UpdateCertificateStatus(ctx context.Context, serialNumber, status string) error {
