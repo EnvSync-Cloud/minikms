@@ -532,8 +532,8 @@ func TestVault_PKIIdentityChain(t *testing.T) {
 	if !orgCACert.IsCA {
 		t.Fatal("org CA certificate should have IsCA=true")
 	}
-	if orgCACert.MaxPathLen != 0 {
-		t.Errorf("org CA MaxPathLen: got %d, want 0", orgCACert.MaxPathLen)
+	if orgCACert.MaxPathLen != 1 {
+		t.Errorf("org CA MaxPathLen: got %d, want 1", orgCACert.MaxPathLen)
 	}
 
 	// To issue a member cert we need the org CA private key.
