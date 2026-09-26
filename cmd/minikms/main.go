@@ -30,6 +30,18 @@ import (
 	"github.com/envsync-cloud/minikms/internal/store"
 )
 
+type redisChallengeStore struct {
+	redis *store.RedisStore
+}
+
+func (r redisChallengeStore) Put(ctx context.Context, nonce []byte, certSerial string, ttl time.Duration) error {
+	return r.redis.PutSessionChallenge(ctx, nonce, certSerial, ttl)
+}
+
+func (r redisChallengeStore) Consume(ctx context.Context, nonce []byte) (string, bool, error) {
+	return r.redis.ConsumeSessionChallenge(ctx, nonce)
+}
+
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -151,6 +163,8 @@ func main() {
 		pgStore,     // policy store
 		auditLogger,
 	)
+	sessionSvc.SetChallengeStore(redisChallengeStore{redisStore})
+	sessionSvc.SetAllowManagedSessions(cfg.AllowManagedSessions)
 
 	vaultSvc := service.NewVaultService(
 		dekManager,

@@ -21,6 +21,17 @@ func NewSessionAdapter(sessionSvc *service.SessionService) *SessionAdapter {
 	return &SessionAdapter{sessionSvc: sessionSvc}
 }
 
+func (a *SessionAdapter) IssueSessionChallenge(ctx context.Context, req *pb.IssueSessionChallengeRequest) (*pb.IssueSessionChallengeResponse, error) {
+	resp, err := a.sessionSvc.IssueSessionChallenge(ctx, req.GetCertSerial())
+	if err != nil {
+		return nil, toStatusError(err)
+	}
+	return &pb.IssueSessionChallengeResponse{
+		Nonce:     resp.Nonce,
+		ExpiresAt: timestamppb.New(resp.ExpiresAt),
+	}, nil
+}
+
 func (a *SessionAdapter) CreateSession(ctx context.Context, req *pb.CreateSessionRequest) (*pb.CreateSessionResponse, error) {
 	var resp *service.CreateSessionResponse
 	var err error

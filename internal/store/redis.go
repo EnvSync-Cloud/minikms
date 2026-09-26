@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -47,6 +49,29 @@ func (s *RedisStore) GetCachedCRL(ctx context.Context, issuerSerial string) ([]b
 		return nil, nil
 	}
 	return data, err
+}
+
+func sessionChallengeRedisKey(nonce []byte) string {
+	sum := sha256.Sum256(nonce)
+	return "session-challenge:" + hex.EncodeToString(sum[:])
+}
+
+// PutSessionChallenge stores a single-use nonce bound to certSerial.
+func (s *RedisStore) PutSessionChallenge(ctx context.Context, nonce []byte, certSerial string, ttl time.Duration) error {
+	return s.client.Set(ctx, sessionChallengeRedisKey(nonce), certSerial, ttl).Err()
+}
+
+// ConsumeSessionChallenge deletes the nonce and returns the bound serial.
+func (s *RedisStore) ConsumeSessionChallenge(ctx context.Context, nonce []byte) (string, bool, error) {
+	key := sessionChallengeRedisKey(nonce)
+	serial, err := s.client.GetDel(ctx, key).Result()
+	if err == redis.Nil {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return serial, true, nil
 }
 
 // Close closes the Redis connection.
