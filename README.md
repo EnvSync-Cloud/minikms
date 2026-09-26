@@ -125,6 +125,7 @@ All configuration is via environment variables:
 | `MINIKMS_ROOT_CA_KEY_FILE` | Conditional | — | Path to the shared P-384 Root CA private key PEM; recommended for production |
 | `MINIKMS_SESSION_SIGNING_KEY` | Conditional | — | P-256 private key in PKCS#8 or SEC1 PEM format |
 | `MINIKMS_SESSION_SIGNING_KEY_FILE` | Conditional | — | Path to a mounted P-256 PEM private key; recommended for production |
+| `MINIKMS_TLS_CA_FILE` | With TLS | — | Client CA PEM for mTLS (API client certs) |
 | `MINIKMS_DB_URL` | Yes | — | PostgreSQL connection string |
 | `MINIKMS_REDIS_URL` | Yes | — | Redis connection string (DEK caching) |
 | `MINIKMS_GRPC_ADDR` | No | `0.0.0.0:50051` | gRPC listen address |

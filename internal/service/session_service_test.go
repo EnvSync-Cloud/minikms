@@ -218,6 +218,21 @@ func (m *mockAuditStore) VerifyChain(_ context.Context, _ string) (bool, error) 
 
 // --- Helpers ---
 
+func mintTestSession(t *testing.T, svc *SessionService, key *ecdsa.PrivateKey, certPEM, serialHex string, scopes []string) *CreateSessionResponse {
+	t.Helper()
+	nonce, sig := signIssuedChallenge(t, svc, key, serialHex)
+	resp, err := svc.CreateSessionByCert(context.Background(), &CreateSessionByCertRequest{
+		CertPEM:     certPEM,
+		SignedNonce: sig,
+		Nonce:       nonce,
+		Scopes:      scopes,
+	})
+	if err != nil {
+		t.Fatalf("CreateSessionByCert: %v", err)
+	}
+	return resp
+}
+
 func setupTestSessionService(t *testing.T) (*SessionService, *mockTokenRegistry, *mockCertStore, *mockPolicyStore) {
 	t.Helper()
 	signingKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -289,110 +304,11 @@ func createTestMemberCert(t *testing.T) (*ecdsa.PrivateKey, *x509.Certificate, [
 
 // --- Tests ---
 
-func TestCreateSessionManaged(t *testing.T) {
-	svc, _, certStore, _ := setupTestSessionService(t)
-	ctx := context.Background()
-
-	_, _, certPEM, serialHex := createTestMemberCert(t)
-
-	// Register the cert in the mock store
-	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
-		SerialNumber: serialHex,
-		CertType:     "member",
-		OrgID:        "org-001",
-		CertPEM:      string(certPEM),
-		Status:       "active",
-		IssuedAt:     time.Now().Add(-time.Hour),
-		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour),
-	})
-
-	resp, err := svc.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
-		MemberID:   "member-001",
-		OrgID:      "org-001",
-		CertSerial: serialHex,
-		Scopes:     []string{"vault:read"},
-	})
-	if err != nil {
-		t.Fatalf("CreateSessionManaged: %v", err)
-	}
-	if resp.SessionToken == "" {
-		t.Error("SessionToken is empty")
-	}
-	if resp.ExpiresAt.Before(time.Now()) {
-		t.Error("ExpiresAt is in the past")
-	}
-	if len(resp.Scopes) == 0 {
-		t.Error("Scopes is empty")
-	}
-}
-
-func TestCreateSessionManaged_CertNotFound(t *testing.T) {
-	svc, _, _, _ := setupTestSessionService(t)
-	_, err := svc.CreateSessionManaged(context.Background(), &CreateSessionManagedRequest{
-		MemberID:   "m1",
-		OrgID:      "o1",
-		CertSerial: "nonexistent",
-	})
-	if err == nil {
-		t.Fatal("expected error for cert not found")
-	}
-}
-
-func TestCreateSessionManaged_InactiveCert(t *testing.T) {
-	svc, _, certStore, _ := setupTestSessionService(t)
-	ctx := context.Background()
-
-	_, _, certPEM, serialHex := createTestMemberCert(t)
-	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
-		SerialNumber: serialHex,
-		CertType:     "member",
-		OrgID:        "org-001",
-		CertPEM:      string(certPEM),
-		Status:       "revoked",
-		IssuedAt:     time.Now().Add(-time.Hour),
-		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour),
-	})
-
-	_, err := svc.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
-		MemberID:   "member-001",
-		OrgID:      "org-001",
-		CertSerial: serialHex,
-	})
-	if err == nil {
-		t.Fatal("expected error for inactive cert")
-	}
-}
-
-func TestCreateSessionManaged_WrongOrg(t *testing.T) {
-	svc, _, certStore, _ := setupTestSessionService(t)
-	ctx := context.Background()
-
-	_, _, certPEM, serialHex := createTestMemberCert(t)
-	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
-		SerialNumber: serialHex,
-		CertType:     "member",
-		OrgID:        "org-001",
-		CertPEM:      string(certPEM),
-		Status:       "active",
-		IssuedAt:     time.Now().Add(-time.Hour),
-		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour),
-	})
-
-	_, err := svc.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
-		MemberID:   "member-001",
-		OrgID:      "org-OTHER",
-		CertSerial: serialHex,
-	})
-	if err == nil {
-		t.Fatal("expected error for org mismatch")
-	}
-}
-
 func TestValidateSession(t *testing.T) {
 	svc, _, certStore, _ := setupTestSessionService(t)
 	ctx := context.Background()
 
-	_, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -404,15 +320,7 @@ func TestValidateSession(t *testing.T) {
 	})
 
 	// Create a session
-	sessionResp, err := svc.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
-		MemberID:   "member-001",
-		OrgID:      "org-001",
-		CertSerial: serialHex,
-		Scopes:     []string{"vault:read", "vault:write"},
-	})
-	if err != nil {
-		t.Fatalf("CreateSessionManaged: %v", err)
-	}
+	sessionResp := mintTestSession(t, svc, memberKey, string(certPEM), serialHex, nil)
 
 	// Validate the session
 	resp, err := svc.ValidateSession(ctx, &ValidateSessionRequest{SessionToken: sessionResp.SessionToken})
@@ -445,7 +353,7 @@ func TestRevokeSession(t *testing.T) {
 	svc, _, certStore, _ := setupTestSessionService(t)
 	ctx := context.Background()
 
-	_, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -456,17 +364,10 @@ func TestRevokeSession(t *testing.T) {
 		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour),
 	})
 
-	sessionResp, err := svc.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
-		MemberID:   "member-001",
-		OrgID:      "org-001",
-		CertSerial: serialHex,
-	})
-	if err != nil {
-		t.Fatalf("CreateSessionManaged: %v", err)
-	}
+	sessionResp := mintTestSession(t, svc, memberKey, string(certPEM), serialHex, nil)
 
 	// Revoke
-	err = svc.RevokeSession(ctx, sessionResp.SessionToken)
+	err := svc.RevokeSession(ctx, sessionResp.SessionToken)
 	if err != nil {
 		t.Fatalf("RevokeSession: %v", err)
 	}
@@ -620,7 +521,7 @@ func TestSessionTokenValidAcrossServicesWithSharedSigningKey(t *testing.T) {
 	validatorService := NewSessionService(validatorKey, "test-issuer", time.Hour, registry, certStore, policyStore, auditLogger)
 
 	ctx := context.Background()
-	_, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
 	if err := certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -633,14 +534,7 @@ func TestSessionTokenValidAcrossServicesWithSharedSigningKey(t *testing.T) {
 		t.Fatalf("StoreCertificate: %v", err)
 	}
 
-	created, err := issuerService.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
-		MemberID:   "member-001",
-		OrgID:      "org-001",
-		CertSerial: serialHex,
-	})
-	if err != nil {
-		t.Fatalf("CreateSessionManaged: %v", err)
-	}
+	created := mintTestSession(t, issuerService, memberKey, string(certPEM), serialHex, nil)
 
 	validated, err := validatorService.ValidateSession(ctx, &ValidateSessionRequest{SessionToken: created.SessionToken})
 	if err != nil {
@@ -651,11 +545,11 @@ func TestSessionTokenValidAcrossServicesWithSharedSigningKey(t *testing.T) {
 	}
 }
 
-func TestCreateSessionManaged_CustomScopes(t *testing.T) {
+func TestCreateSessionByCert_CustomScopes(t *testing.T) {
 	svc, _, certStore, _ := setupTestSessionService(t)
 	ctx := context.Background()
 
-	_, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -667,15 +561,7 @@ func TestCreateSessionManaged_CustomScopes(t *testing.T) {
 	})
 
 	// Request specific scopes that override role defaults
-	resp, err := svc.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
-		MemberID:   "member-001",
-		OrgID:      "org-001",
-		CertSerial: serialHex,
-		Scopes:     []string{"vault:read"},
-	})
-	if err != nil {
-		t.Fatalf("CreateSessionManaged: %v", err)
-	}
+	resp := mintTestSession(t, svc, memberKey, string(certPEM), serialHex, []string{"vault:read"})
 	if len(resp.Scopes) != 1 {
 		t.Errorf("expected 1 scope, got %d: %v", len(resp.Scopes), resp.Scopes)
 	}
@@ -705,7 +591,7 @@ func TestValidateSession_Expired(t *testing.T) {
 	}
 	policyStore.mu.Unlock()
 
-	_, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -716,14 +602,7 @@ func TestValidateSession_Expired(t *testing.T) {
 		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour),
 	})
 
-	sessionResp, err := svc.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
-		MemberID:   "member-001",
-		OrgID:      "org-001",
-		CertSerial: serialHex,
-	})
-	if err != nil {
-		t.Fatalf("CreateSessionManaged: %v", err)
-	}
+	sessionResp := mintTestSession(t, svc, memberKey, string(certPEM), serialHex, nil)
 
 	// Wait for expiration
 	time.Sleep(50 * time.Millisecond)
@@ -782,7 +661,7 @@ func TestValidateSessionFromToken(t *testing.T) {
 	svc, _, certStore, _ := setupTestSessionService(t)
 	ctx := context.Background()
 
-	_, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -793,14 +672,7 @@ func TestValidateSessionFromToken(t *testing.T) {
 		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour),
 	})
 
-	sessionResp, err := svc.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
-		MemberID:   "member-001",
-		OrgID:      "org-001",
-		CertSerial: serialHex,
-	})
-	if err != nil {
-		t.Fatalf("CreateSessionManaged: %v", err)
-	}
+	sessionResp := mintTestSession(t, svc, memberKey, string(certPEM), serialHex, nil)
 
 	resp, err := svc.ValidateSessionFromToken(ctx, sessionResp.SessionToken)
 	if err != nil {
@@ -836,17 +708,7 @@ func TestCreateSessionByCert(t *testing.T) {
 		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour),
 	})
 
-	// Sign a nonce
-	nonce, err := GenerateNonce()
-	if err != nil {
-		t.Fatalf("GenerateNonce: %v", err)
-	}
-
-	hash := sha256Sum(nonce)
-	sig, err := ecdsa.SignASN1(rand.Reader, memberKey, hash[:])
-	if err != nil {
-		t.Fatalf("SignASN1: %v", err)
-	}
+	nonce, sig := signIssuedChallenge(t, svc, memberKey, serialHex)
 
 	resp, err := svc.CreateSessionByCert(ctx, &CreateSessionByCertRequest{
 		CertPEM:     string(certPEM),
@@ -892,11 +754,14 @@ func TestCreateSessionByCert_BadSignature(t *testing.T) {
 		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour),
 	})
 
-	nonce, _ := GenerateNonce()
-	_, err := svc.CreateSessionByCert(ctx, &CreateSessionByCertRequest{
+	ch, err := svc.IssueSessionChallenge(ctx, serialHex)
+	if err != nil {
+		t.Fatalf("IssueSessionChallenge: %v", err)
+	}
+	_, err = svc.CreateSessionByCert(ctx, &CreateSessionByCertRequest{
 		CertPEM:     string(certPEM),
 		SignedNonce: []byte("invalid-signature"),
-		Nonce:       nonce,
+		Nonce:       ch.Nonce,
 	})
 	if err == nil {
 		t.Fatal("expected error for bad signature")
@@ -918,9 +783,7 @@ func TestCreateSessionByCert_RevokedCert(t *testing.T) {
 		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour),
 	})
 
-	nonce, _ := GenerateNonce()
-	hash := sha256Sum(nonce)
-	sig, _ := ecdsa.SignASN1(rand.Reader, memberKey, hash[:])
+	nonce, sig := signIssuedChallenge(t, svc, memberKey, serialHex)
 
 	_, err := svc.CreateSessionByCert(ctx, &CreateSessionByCertRequest{
 		CertPEM:     string(certPEM),
@@ -936,7 +799,7 @@ func TestRevokeMemberSessions(t *testing.T) {
 	svc, _, certStore, policyStore := setupTestSessionService(t)
 	ctx := context.Background()
 
-	_, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -948,14 +811,7 @@ func TestRevokeMemberSessions(t *testing.T) {
 	})
 
 	// Create a session
-	sessionResp, err := svc.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
-		MemberID:   "member-001",
-		OrgID:      "org-001",
-		CertSerial: serialHex,
-	})
-	if err != nil {
-		t.Fatalf("CreateSessionManaged: %v", err)
-	}
+	sessionResp := mintTestSession(t, svc, memberKey, string(certPEM), serialHex, nil)
 
 	// Seed the policy store with the token entry so RevokeMemberSessions finds it
 	subjectHash := auth.HashSubject("member-001")
@@ -978,6 +834,73 @@ func TestRevokeMemberSessions(t *testing.T) {
 	}
 
 	_ = sessionResp // used to verify session was created
+}
+
+func signIssuedChallenge(t *testing.T, svc *SessionService, key *ecdsa.PrivateKey, serialHex string) ([]byte, []byte) {
+	t.Helper()
+	ch, err := svc.IssueSessionChallenge(context.Background(), serialHex)
+	if err != nil {
+		t.Fatalf("IssueSessionChallenge: %v", err)
+	}
+	hash := sha256Sum(ch.Nonce)
+	sig, err := ecdsa.SignASN1(rand.Reader, key, hash[:])
+	if err != nil {
+		t.Fatalf("SignASN1: %v", err)
+	}
+	return ch.Nonce, sig
+}
+
+func TestCreateSessionByCert_ReplayNonce(t *testing.T) {
+	svc, _, certStore, _ := setupTestSessionService(t)
+	ctx := context.Background()
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
+	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
+		SerialNumber: serialHex,
+		CertType:     "member",
+		OrgID:        "org-001",
+		CertPEM:      string(certPEM),
+		Status:       "active",
+		IssuedAt:     time.Now().Add(-time.Hour),
+		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour),
+	})
+	nonce, sig := signIssuedChallenge(t, svc, memberKey, serialHex)
+	req := &CreateSessionByCertRequest{CertPEM: string(certPEM), SignedNonce: sig, Nonce: nonce, Scopes: []string{"vault:read"}}
+	if _, err := svc.CreateSessionByCert(ctx, req); err != nil {
+		t.Fatalf("first CreateSessionByCert: %v", err)
+	}
+	if _, err := svc.CreateSessionByCert(ctx, req); err == nil {
+		t.Fatal("expected replayed nonce to fail")
+	}
+}
+
+func TestCreateSessionByCert_UnissuedNonce(t *testing.T) {
+	svc, _, certStore, _ := setupTestSessionService(t)
+	ctx := context.Background()
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
+	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
+		SerialNumber: serialHex,
+		CertType:     "member",
+		OrgID:        "org-001",
+		CertPEM:      string(certPEM),
+		Status:       "active",
+		IssuedAt:     time.Now().Add(-time.Hour),
+		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour),
+	})
+	nonce, err := GenerateNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256Sum(nonce)
+	sig, err := ecdsa.SignASN1(rand.Reader, memberKey, hash[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.CreateSessionByCert(ctx, &CreateSessionByCertRequest{
+		CertPEM: string(certPEM), SignedNonce: sig, Nonce: nonce,
+	})
+	if err == nil {
+		t.Fatal("expected unissued nonce to fail")
+	}
 }
 
 // sha256Sum is a helper to compute SHA-256.

@@ -128,8 +128,10 @@ The HA client verifies all of the following:
 
 - encrypt on replica 1 and decrypt on replica 2;
 - create an Org CA on replica 1 and issue a member certificate on replica 2;
-- create a managed session on replica 1;
-- write a vault value through replica 1 and read it through replica 2.
+- mint a **cert-proof** session on replica 1 (signed server nonce);
+- write a vault value through replica 1 and read it through replica 2;
+- revoke that session on replica 1 and fail vault read on replica 2;
+- revoke the member cert and refuse a new session.
 
 After Kubernetes deployment, repeat these checks through the Service and while
 restarting one pod:

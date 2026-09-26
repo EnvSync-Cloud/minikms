@@ -10,6 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"crypto/tls"
+	"crypto/x509"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
@@ -29,6 +32,42 @@ import (
 	"github.com/envsync-cloud/minikms/internal/service"
 	"github.com/envsync-cloud/minikms/internal/store"
 )
+
+type redisChallengeStore struct {
+	redis *store.RedisStore
+}
+
+func (r redisChallengeStore) Put(ctx context.Context, nonce []byte, certSerial string, ttl time.Duration) error {
+	return r.redis.PutSessionChallenge(ctx, nonce, certSerial, ttl)
+}
+
+func (r redisChallengeStore) Consume(ctx context.Context, nonce []byte) (string, bool, error) {
+	return r.redis.ConsumeSessionChallenge(ctx, nonce)
+}
+
+func loadMTLSServerCreds(cfg *config.Config) (credentials.TransportCredentials, error) {
+	cert, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
+	if err != nil {
+		return nil, fmt.Errorf("load server keypair: %w", err)
+	}
+	tlsCfg := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS13,
+	}
+	if cfg.TLSCAFile != "" {
+		pemBytes, err := os.ReadFile(cfg.TLSCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read client CA: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pemBytes) {
+			return nil, fmt.Errorf("parse client CA")
+		}
+		tlsCfg.ClientCAs = pool
+		tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
+	}
+	return credentials.NewTLS(tlsCfg), nil
+}
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -151,6 +190,7 @@ func main() {
 		pgStore,     // policy store
 		auditLogger,
 	)
+	sessionSvc.SetChallengeStore(redisChallengeStore{redisStore})
 
 	vaultSvc := service.NewVaultService(
 		dekManager,
@@ -170,7 +210,7 @@ func main() {
 	// Create gRPC server
 	var opts []grpc.ServerOption
 	if cfg.TLSEnabled {
-		creds, err := credentials.NewServerTLSFromFile(cfg.TLSCert, cfg.TLSKey)
+		creds, err := loadMTLSServerCreds(cfg)
 		if err != nil {
 			log.Fatalf("Failed to load TLS credentials: %v", err)
 		}

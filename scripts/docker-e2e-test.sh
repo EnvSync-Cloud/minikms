@@ -26,9 +26,13 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
+# grpc-e2e: KMS roundtrip, rotation, PKI, env CA, leaf, cert-proof vault,
+# tenant isolation, wrong AAD, missing cert_auth, unissued nonce, replay.
 echo "==> Running gRPC client example..."
 go run ./examples/grpc-e2e/
 
+# grpc-ha-e2e: encrypt r1/decrypt r2, org CA r1/member r2, session r1/vault r2,
+# revoke session, revoke member cert.
 echo "==> Running two-replica HA gRPC flow..."
 go run ./examples/grpc-ha-e2e/
 

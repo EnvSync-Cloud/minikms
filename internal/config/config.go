@@ -22,6 +22,7 @@ type Config struct {
 	TLSEnabled bool   `envconfig:"MINIKMS_TLS_ENABLED" default:"false"`
 	TLSCert    string `envconfig:"MINIKMS_TLS_CERT"`
 	TLSKey     string `envconfig:"MINIKMS_TLS_KEY"`
+	TLSCAFile  string `envconfig:"MINIKMS_TLS_CA_FILE"`
 
 	// Rate limiting
 	RateLimitPerSecond int `envconfig:"MINIKMS_RATE_LIMIT_PER_SECOND" default:"100"`

@@ -21,28 +21,28 @@ func NewSessionAdapter(sessionSvc *service.SessionService) *SessionAdapter {
 	return &SessionAdapter{sessionSvc: sessionSvc}
 }
 
-func (a *SessionAdapter) CreateSession(ctx context.Context, req *pb.CreateSessionRequest) (*pb.CreateSessionResponse, error) {
-	var resp *service.CreateSessionResponse
-	var err error
-
-	switch auth := req.Auth.(type) {
-	case *pb.CreateSessionRequest_CertAuth:
-		resp, err = a.sessionSvc.CreateSessionByCert(ctx, &service.CreateSessionByCertRequest{
-			CertPEM:     auth.CertAuth.CertPem,
-			SignedNonce: auth.CertAuth.SignedNonce,
-			Nonce:       auth.CertAuth.Nonce,
-			Scopes:      req.Scopes,
-		})
-	case *pb.CreateSessionRequest_ManagedAuth:
-		resp, err = a.sessionSvc.CreateSessionManaged(ctx, &service.CreateSessionManagedRequest{
-			MemberID:   auth.ManagedAuth.MemberId,
-			OrgID:      auth.ManagedAuth.OrgId,
-			CertSerial: auth.ManagedAuth.CertSerial,
-			Scopes:     req.Scopes,
-		})
-	default:
-		return nil, status.Error(codes.InvalidArgument, "auth method required")
+func (a *SessionAdapter) IssueSessionChallenge(ctx context.Context, req *pb.IssueSessionChallengeRequest) (*pb.IssueSessionChallengeResponse, error) {
+	resp, err := a.sessionSvc.IssueSessionChallenge(ctx, req.GetCertSerial())
+	if err != nil {
+		return nil, toStatusError(err)
 	}
+	return &pb.IssueSessionChallengeResponse{
+		Nonce:     resp.Nonce,
+		ExpiresAt: timestamppb.New(resp.ExpiresAt),
+	}, nil
+}
+
+func (a *SessionAdapter) CreateSession(ctx context.Context, req *pb.CreateSessionRequest) (*pb.CreateSessionResponse, error) {
+	if req.GetCertAuth() == nil {
+		return nil, status.Error(codes.InvalidArgument, "cert_auth is required")
+	}
+	auth := req.GetCertAuth()
+	resp, err := a.sessionSvc.CreateSessionByCert(ctx, &service.CreateSessionByCertRequest{
+		CertPEM:     auth.CertPem,
+		SignedNonce: auth.SignedNonce,
+		Nonce:       auth.Nonce,
+		Scopes:      req.Scopes,
+	})
 
 	if err != nil {
 		return nil, toStatusError(err)

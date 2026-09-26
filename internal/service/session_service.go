@@ -34,8 +34,9 @@ type SessionService struct {
 	defaultTTL  time.Duration
 	registry    auth.TokenRegistry
 	certStore   pkistore.Store
-	policyStore SessionPolicyStore
-	auditLogger *audit.AuditLogger
+	policyStore           SessionPolicyStore
+	auditLogger           *audit.AuditLogger
+	challenges ChallengeStore
 }
 
 // NewSessionService creates a new SessionService.
@@ -54,9 +55,41 @@ func NewSessionService(
 		defaultTTL:  defaultTTL,
 		registry:    registry,
 		certStore:   certStore,
-		policyStore: policyStore,
-		auditLogger: auditLogger,
+		policyStore:          policyStore,
+		auditLogger:          auditLogger,
+		challenges: NewMemoryChallengeStore(),
 	}
+}
+
+func (s *SessionService) SetChallengeStore(store ChallengeStore) {
+	if store != nil {
+		s.challenges = store
+	}
+}
+
+type IssueSessionChallengeResponse struct {
+	Nonce     []byte
+	ExpiresAt time.Time
+}
+
+func (s *SessionService) IssueSessionChallenge(ctx context.Context, certSerial string) (*IssueSessionChallengeResponse, error) {
+	if certSerial == "" {
+		return nil, invalidArgument("cert_serial is required")
+	}
+	if s.challenges == nil {
+		return nil, NewDomainError(ErrorFailedPrecondition, "session challenge store is not initialized", nil)
+	}
+	nonce, err := GenerateNonce()
+	if err != nil {
+		return nil, err
+	}
+	if err := s.challenges.Put(ctx, nonce, certSerial, sessionChallengeTTL); err != nil {
+		return nil, internalError("failed to store session challenge", err)
+	}
+	return &IssueSessionChallengeResponse{
+		Nonce:     nonce,
+		ExpiresAt: time.Now().Add(sessionChallengeTTL),
+	}, nil
 }
 
 // SessionClaims extends JWT claims with session-specific fields.
@@ -74,14 +107,6 @@ type CreateSessionByCertRequest struct {
 	SignedNonce []byte
 	Nonce       []byte
 	Scopes      []string
-}
-
-// CreateSessionManagedRequest represents a web/managed auth request.
-type CreateSessionManagedRequest struct {
-	MemberID   string
-	OrgID      string
-	CertSerial string
-	Scopes     []string
 }
 
 // CreateSessionResponse represents the result of session creation.
@@ -160,59 +185,23 @@ func (s *SessionService) CreateSessionByCert(ctx context.Context, req *CreateSes
 			fmt.Errorf("certificate has expired"))
 	}
 
+	if s.challenges == nil {
+		return nil, NewDomainError(ErrorFailedPrecondition, "session challenge store is not initialized", nil)
+	}
+	boundSerial, ok, err := s.challenges.Consume(ctx, req.Nonce)
+	if err != nil {
+		return nil, internalError("failed to consume session challenge", err)
+	}
+	if !ok || boundSerial != serialHex {
+		return nil, NewDomainError(ErrorUnauthenticated, "certificate authentication failed",
+			fmt.Errorf("session challenge is missing, expired, or bound to a different certificate"))
+	}
+
 	// Determine scopes
 	scopes := s.resolveScopes(req.Scopes, role)
 
 	// Issue session token
 	return s.issueSessionToken(ctx, memberID, orgID, role, serialHex, scopes)
-}
-
-// CreateSessionManaged creates a session for a managed/web member (pre-authenticated via OIDC).
-func (s *SessionService) CreateSessionManaged(ctx context.Context, req *CreateSessionManagedRequest) (*CreateSessionResponse, error) {
-	if req == nil {
-		return nil, invalidArgument("request is required")
-	}
-	if err := requireFields(
-		requiredField("member_id", req.MemberID),
-		requiredField("org_id", req.OrgID),
-		requiredField("cert_serial", req.CertSerial),
-	); err != nil {
-		return nil, err
-	}
-
-	// Verify the cert exists and is active
-	certRecord, err := s.certStore.GetCertificateBySerial(ctx, req.CertSerial)
-	if err != nil {
-		return nil, internalError("failed to check certificate status", err)
-	}
-	if certRecord == nil {
-		return nil, NewDomainError(ErrorUnauthenticated, "managed authentication failed",
-			fmt.Errorf("certificate not found"))
-	}
-	if certRecord.Status != "active" {
-		return nil, NewDomainError(ErrorUnauthenticated, "managed authentication failed",
-			fmt.Errorf("certificate is not active"))
-	}
-	if certRecord.OrgID != req.OrgID {
-		return nil, NewDomainError(ErrorUnauthenticated, "managed authentication failed",
-			fmt.Errorf("certificate organization mismatch"))
-	}
-
-	// Parse cert to extract role
-	block, _ := pem.Decode([]byte(certRecord.CertPEM))
-	if block == nil {
-		return nil, internalError("invalid stored certificate PEM", nil)
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, internalError("failed to parse stored certificate", err)
-	}
-	role := pki.ExtractOIDValue(cert, pki.OIDRole)
-
-	// Determine scopes
-	scopes := s.resolveScopes(req.Scopes, role)
-
-	return s.issueSessionToken(ctx, req.MemberID, req.OrgID, role, req.CertSerial, scopes)
 }
 
 // ValidateSessionRequest represents a session validation request.
