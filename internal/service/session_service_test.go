@@ -245,7 +245,7 @@ func setupTestSessionService(t *testing.T) (*SessionService, *mockTokenRegistry,
 	policyStore := newMockPolicyStore()
 	auditLogger := audit.NewAuditLogger(&mockAuditStore{})
 
-	svc := NewSessionService(signingKey, "test-issuer", 1*time.Hour, registry, certStore, policyStore, auditLogger)
+	svc := NewSessionService(signingKey, "test-issuer", 1*time.Hour, registry, certStore, policyStore, auditLogger, store.NewMemoryChallengeStore())
 	return svc, registry, certStore, policyStore
 }
 
@@ -517,8 +517,8 @@ func TestSessionTokenValidAcrossServicesWithSharedSigningKey(t *testing.T) {
 	certStore := newMockCertStore()
 	policyStore := newMockPolicyStore()
 	auditLogger := audit.NewAuditLogger(&mockAuditStore{})
-	issuerService := NewSessionService(issuerKey, "test-issuer", time.Hour, registry, certStore, policyStore, auditLogger)
-	validatorService := NewSessionService(validatorKey, "test-issuer", time.Hour, registry, certStore, policyStore, auditLogger)
+	issuerService := NewSessionService(issuerKey, "test-issuer", time.Hour, registry, certStore, policyStore, auditLogger, store.NewMemoryChallengeStore())
+	validatorService := NewSessionService(validatorKey, "test-issuer", time.Hour, registry, certStore, policyStore, auditLogger, store.NewMemoryChallengeStore())
 
 	ctx := context.Background()
 	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
@@ -579,7 +579,7 @@ func TestValidateSession_Expired(t *testing.T) {
 	auditLogger := audit.NewAuditLogger(&mockAuditStore{})
 
 	// Very short TTL: 1 millisecond
-	svc := NewSessionService(signingKey, "test-issuer", 1*time.Millisecond, registry, certStore, policyStore, auditLogger)
+	svc := NewSessionService(signingKey, "test-issuer", 1*time.Millisecond, registry, certStore, policyStore, auditLogger, store.NewMemoryChallengeStore())
 	ctx := context.Background()
 
 	// Set policy with SessionDurationSec=0 so it falls back to the 1ms defaultTTL
@@ -773,17 +773,19 @@ func TestCreateSessionByCert_RevokedCert(t *testing.T) {
 	ctx := context.Background()
 
 	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
-	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
+	rec := &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
 		OrgID:        "org-001",
 		CertPEM:      string(certPEM),
-		Status:       "revoked",
+		Status:       "active",
 		IssuedAt:     time.Now().Add(-time.Hour),
 		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour),
-	})
-
+	}
+	_ = certStore.StoreCertificate(ctx, rec)
 	nonce, sig := signIssuedChallenge(t, svc, memberKey, serialHex)
+	rec.Status = "revoked"
+	_ = certStore.StoreCertificate(ctx, rec)
 
 	_, err := svc.CreateSessionByCert(ctx, &CreateSessionByCertRequest{
 		CertPEM:     string(certPEM),
@@ -870,6 +872,14 @@ func TestCreateSessionByCert_ReplayNonce(t *testing.T) {
 	}
 	if _, err := svc.CreateSessionByCert(ctx, req); err == nil {
 		t.Fatal("expected replayed nonce to fail")
+	}
+}
+
+func TestIssueSessionChallenge_UnknownSerial(t *testing.T) {
+	svc, _, _, _ := setupTestSessionService(t)
+	_, err := svc.IssueSessionChallenge(context.Background(), "missing-serial")
+	if err == nil {
+		t.Fatal("expected error for unknown serial")
 	}
 }
 
