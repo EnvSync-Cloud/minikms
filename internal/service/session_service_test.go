@@ -903,19 +903,6 @@ func TestCreateSessionByCert_UnissuedNonce(t *testing.T) {
 	}
 }
 
-
-func errorsAsDomain(err error, target **DomainError) bool {
-	if err == nil {
-		return false
-	}
-	d, ok := err.(*DomainError)
-	if !ok {
-		return false
-	}
-	*target = d
-	return true
-}
-
 // sha256Sum is a helper to compute SHA-256.
 func sha256Sum(data []byte) [32]byte {
 	return sha256.Sum256(data)
