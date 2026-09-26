@@ -119,16 +119,9 @@ func (x *IssueSessionChallengeResponse) GetExpiresAt() *timestamppb.Timestamp {
 }
 
 type CreateSessionRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Authentication method
-	//
-	// Types that are valid to be assigned to Auth:
-	//
-	//	*CreateSessionRequest_CertAuth
-	//	*CreateSessionRequest_ManagedAuth
-	Auth isCreateSessionRequest_Auth `protobuf_oneof:"auth"`
-	// Requested scopes (optional, defaults to role-based defaults)
-	Scopes        []string `protobuf:"bytes,3,rep,name=scopes,proto3" json:"scopes,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CertAuth      *CertAuth              `protobuf:"bytes,1,opt,name=cert_auth,json=certAuth,proto3" json:"cert_auth,omitempty"`
+	Scopes        []string               `protobuf:"bytes,3,rep,name=scopes,proto3" json:"scopes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -163,27 +156,9 @@ func (*CreateSessionRequest) Descriptor() ([]byte, []int) {
 	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *CreateSessionRequest) GetAuth() isCreateSessionRequest_Auth {
-	if x != nil {
-		return x.Auth
-	}
-	return nil
-}
-
 func (x *CreateSessionRequest) GetCertAuth() *CertAuth {
 	if x != nil {
-		if x, ok := x.Auth.(*CreateSessionRequest_CertAuth); ok {
-			return x.CertAuth
-		}
-	}
-	return nil
-}
-
-func (x *CreateSessionRequest) GetManagedAuth() *ManagedAuth {
-	if x != nil {
-		if x, ok := x.Auth.(*CreateSessionRequest_ManagedAuth); ok {
-			return x.ManagedAuth
-		}
+		return x.CertAuth
 	}
 	return nil
 }
@@ -195,28 +170,12 @@ func (x *CreateSessionRequest) GetScopes() []string {
 	return nil
 }
 
-type isCreateSessionRequest_Auth interface {
-	isCreateSessionRequest_Auth()
-}
-
-type CreateSessionRequest_CertAuth struct {
-	CertAuth *CertAuth `protobuf:"bytes,1,opt,name=cert_auth,json=certAuth,proto3,oneof"` // BYOK/CLI: certificate-based auth
-}
-
-type CreateSessionRequest_ManagedAuth struct {
-	ManagedAuth *ManagedAuth `protobuf:"bytes,2,opt,name=managed_auth,json=managedAuth,proto3,oneof"` // Web: pre-authenticated via OIDC
-}
-
-func (*CreateSessionRequest_CertAuth) isCreateSessionRequest_Auth() {}
-
-func (*CreateSessionRequest_ManagedAuth) isCreateSessionRequest_Auth() {}
-
-// Certificate-based authentication for BYOK/CLI members.
+// Certificate-based authentication: sign a nonce from IssueSessionChallenge.
 type CertAuth struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	CertPem       string                 `protobuf:"bytes,1,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`             // Member certificate in PEM format
-	SignedNonce   []byte                 `protobuf:"bytes,2,opt,name=signed_nonce,json=signedNonce,proto3" json:"signed_nonce,omitempty"` // Nonce signed with member's private key
-	Nonce         []byte                 `protobuf:"bytes,3,opt,name=nonce,proto3" json:"nonce,omitempty"`                                // Original nonce value
+	CertPem       string                 `protobuf:"bytes,1,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`
+	SignedNonce   []byte                 `protobuf:"bytes,2,opt,name=signed_nonce,json=signedNonce,proto3" json:"signed_nonce,omitempty"`
+	Nonce         []byte                 `protobuf:"bytes,3,opt,name=nonce,proto3" json:"nonce,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -272,67 +231,6 @@ func (x *CertAuth) GetNonce() []byte {
 	return nil
 }
 
-// Pre-authenticated via OIDC for web/managed members.
-type ManagedAuth struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	MemberId      string                 `protobuf:"bytes,1,opt,name=member_id,json=memberId,proto3" json:"member_id,omitempty"`
-	OrgId         string                 `protobuf:"bytes,2,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
-	CertSerial    string                 `protobuf:"bytes,3,opt,name=cert_serial,json=certSerial,proto3" json:"cert_serial,omitempty"` // Member cert serial (looked up by envsync-api)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ManagedAuth) Reset() {
-	*x = ManagedAuth{}
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ManagedAuth) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ManagedAuth) ProtoMessage() {}
-
-func (x *ManagedAuth) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ManagedAuth.ProtoReflect.Descriptor instead.
-func (*ManagedAuth) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *ManagedAuth) GetMemberId() string {
-	if x != nil {
-		return x.MemberId
-	}
-	return ""
-}
-
-func (x *ManagedAuth) GetOrgId() string {
-	if x != nil {
-		return x.OrgId
-	}
-	return ""
-}
-
-func (x *ManagedAuth) GetCertSerial() string {
-	if x != nil {
-		return x.CertSerial
-	}
-	return ""
-}
-
 type CreateSessionResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionToken  string                 `protobuf:"bytes,1,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"` // JWT session token
@@ -344,7 +242,7 @@ type CreateSessionResponse struct {
 
 func (x *CreateSessionResponse) Reset() {
 	*x = CreateSessionResponse{}
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[5]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -356,7 +254,7 @@ func (x *CreateSessionResponse) String() string {
 func (*CreateSessionResponse) ProtoMessage() {}
 
 func (x *CreateSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[5]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -369,7 +267,7 @@ func (x *CreateSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSessionResponse.ProtoReflect.Descriptor instead.
 func (*CreateSessionResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{5}
+	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CreateSessionResponse) GetSessionToken() string {
@@ -402,7 +300,7 @@ type ValidateSessionRequest struct {
 
 func (x *ValidateSessionRequest) Reset() {
 	*x = ValidateSessionRequest{}
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[6]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -414,7 +312,7 @@ func (x *ValidateSessionRequest) String() string {
 func (*ValidateSessionRequest) ProtoMessage() {}
 
 func (x *ValidateSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[6]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -427,7 +325,7 @@ func (x *ValidateSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateSessionRequest.ProtoReflect.Descriptor instead.
 func (*ValidateSessionRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{6}
+	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ValidateSessionRequest) GetSessionToken() string {
@@ -452,7 +350,7 @@ type ValidateSessionResponse struct {
 
 func (x *ValidateSessionResponse) Reset() {
 	*x = ValidateSessionResponse{}
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[7]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -464,7 +362,7 @@ func (x *ValidateSessionResponse) String() string {
 func (*ValidateSessionResponse) ProtoMessage() {}
 
 func (x *ValidateSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[7]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -477,7 +375,7 @@ func (x *ValidateSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateSessionResponse.ProtoReflect.Descriptor instead.
 func (*ValidateSessionResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{7}
+	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ValidateSessionResponse) GetValid() bool {
@@ -538,7 +436,7 @@ type RevokeSessionRequest struct {
 
 func (x *RevokeSessionRequest) Reset() {
 	*x = RevokeSessionRequest{}
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[8]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -550,7 +448,7 @@ func (x *RevokeSessionRequest) String() string {
 func (*RevokeSessionRequest) ProtoMessage() {}
 
 func (x *RevokeSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[8]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -563,7 +461,7 @@ func (x *RevokeSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeSessionRequest.ProtoReflect.Descriptor instead.
 func (*RevokeSessionRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{8}
+	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RevokeSessionRequest) GetSessionToken() string {
@@ -582,7 +480,7 @@ type RevokeSessionResponse struct {
 
 func (x *RevokeSessionResponse) Reset() {
 	*x = RevokeSessionResponse{}
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[9]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -594,7 +492,7 @@ func (x *RevokeSessionResponse) String() string {
 func (*RevokeSessionResponse) ProtoMessage() {}
 
 func (x *RevokeSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[9]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -607,7 +505,7 @@ func (x *RevokeSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeSessionResponse.ProtoReflect.Descriptor instead.
 func (*RevokeSessionResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{9}
+	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RevokeSessionResponse) GetSuccess() bool {
@@ -627,7 +525,7 @@ type RevokeMemberSessionsRequest struct {
 
 func (x *RevokeMemberSessionsRequest) Reset() {
 	*x = RevokeMemberSessionsRequest{}
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[10]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -639,7 +537,7 @@ func (x *RevokeMemberSessionsRequest) String() string {
 func (*RevokeMemberSessionsRequest) ProtoMessage() {}
 
 func (x *RevokeMemberSessionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[10]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -652,7 +550,7 @@ func (x *RevokeMemberSessionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeMemberSessionsRequest.ProtoReflect.Descriptor instead.
 func (*RevokeMemberSessionsRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{10}
+	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RevokeMemberSessionsRequest) GetMemberId() string {
@@ -678,7 +576,7 @@ type RevokeMemberSessionsResponse struct {
 
 func (x *RevokeMemberSessionsResponse) Reset() {
 	*x = RevokeMemberSessionsResponse{}
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[11]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -690,7 +588,7 @@ func (x *RevokeMemberSessionsResponse) String() string {
 func (*RevokeMemberSessionsResponse) ProtoMessage() {}
 
 func (x *RevokeMemberSessionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[11]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -703,7 +601,7 @@ func (x *RevokeMemberSessionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeMemberSessionsResponse.ProtoReflect.Descriptor instead.
 func (*RevokeMemberSessionsResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{11}
+	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RevokeMemberSessionsResponse) GetRevokedCount() int32 {
@@ -723,7 +621,7 @@ type ListSessionsRequest struct {
 
 func (x *ListSessionsRequest) Reset() {
 	*x = ListSessionsRequest{}
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[12]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -735,7 +633,7 @@ func (x *ListSessionsRequest) String() string {
 func (*ListSessionsRequest) ProtoMessage() {}
 
 func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[12]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -748,7 +646,7 @@ func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionsRequest.ProtoReflect.Descriptor instead.
 func (*ListSessionsRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{12}
+	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListSessionsRequest) GetMemberId() string {
@@ -774,7 +672,7 @@ type ListSessionsResponse struct {
 
 func (x *ListSessionsResponse) Reset() {
 	*x = ListSessionsResponse{}
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[13]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -786,7 +684,7 @@ func (x *ListSessionsResponse) String() string {
 func (*ListSessionsResponse) ProtoMessage() {}
 
 func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[13]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -799,7 +697,7 @@ func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionsResponse.ProtoReflect.Descriptor instead.
 func (*ListSessionsResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{13}
+	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ListSessionsResponse) GetSessions() []*SessionInfo {
@@ -823,7 +721,7 @@ type SessionInfo struct {
 
 func (x *SessionInfo) Reset() {
 	*x = SessionInfo{}
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[14]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -835,7 +733,7 @@ func (x *SessionInfo) String() string {
 func (*SessionInfo) ProtoMessage() {}
 
 func (x *SessionInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[14]
+	mi := &file_api_proto_minikms_v1_session_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -848,7 +746,7 @@ func (x *SessionInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionInfo.ProtoReflect.Descriptor instead.
 func (*SessionInfo) Descriptor() ([]byte, []int) {
-	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{14}
+	return file_api_proto_minikms_v1_session_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *SessionInfo) GetJti() string {
@@ -905,21 +803,14 @@ const file_api_proto_minikms_v1_session_proto_rawDesc = "" +
 	"\x1dIssueSessionChallengeResponse\x12\x14\n" +
 	"\x05nonce\x18\x01 \x01(\fR\x05nonce\x129\n" +
 	"\n" +
-	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xa9\x01\n" +
-	"\x14CreateSessionRequest\x123\n" +
-	"\tcert_auth\x18\x01 \x01(\v2\x14.minikms.v1.CertAuthH\x00R\bcertAuth\x12<\n" +
-	"\fmanaged_auth\x18\x02 \x01(\v2\x17.minikms.v1.ManagedAuthH\x00R\vmanagedAuth\x12\x16\n" +
-	"\x06scopes\x18\x03 \x03(\tR\x06scopesB\x06\n" +
-	"\x04auth\"^\n" +
+	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"a\n" +
+	"\x14CreateSessionRequest\x121\n" +
+	"\tcert_auth\x18\x01 \x01(\v2\x14.minikms.v1.CertAuthR\bcertAuth\x12\x16\n" +
+	"\x06scopes\x18\x03 \x03(\tR\x06scopes\"^\n" +
 	"\bCertAuth\x12\x19\n" +
 	"\bcert_pem\x18\x01 \x01(\tR\acertPem\x12!\n" +
 	"\fsigned_nonce\x18\x02 \x01(\fR\vsignedNonce\x12\x14\n" +
-	"\x05nonce\x18\x03 \x01(\fR\x05nonce\"b\n" +
-	"\vManagedAuth\x12\x1b\n" +
-	"\tmember_id\x18\x01 \x01(\tR\bmemberId\x12\x15\n" +
-	"\x06org_id\x18\x02 \x01(\tR\x05orgId\x12\x1f\n" +
-	"\vcert_serial\x18\x03 \x01(\tR\n" +
-	"certSerial\"\x8f\x01\n" +
+	"\x05nonce\x18\x03 \x01(\fR\x05nonce\"\x8f\x01\n" +
 	"\x15CreateSessionResponse\x12#\n" +
 	"\rsession_token\x18\x01 \x01(\tR\fsessionToken\x129\n" +
 	"\n" +
@@ -980,51 +871,49 @@ func file_api_proto_minikms_v1_session_proto_rawDescGZIP() []byte {
 	return file_api_proto_minikms_v1_session_proto_rawDescData
 }
 
-var file_api_proto_minikms_v1_session_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_api_proto_minikms_v1_session_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_api_proto_minikms_v1_session_proto_goTypes = []any{
 	(*IssueSessionChallengeRequest)(nil),  // 0: minikms.v1.IssueSessionChallengeRequest
 	(*IssueSessionChallengeResponse)(nil), // 1: minikms.v1.IssueSessionChallengeResponse
 	(*CreateSessionRequest)(nil),          // 2: minikms.v1.CreateSessionRequest
 	(*CertAuth)(nil),                      // 3: minikms.v1.CertAuth
-	(*ManagedAuth)(nil),                   // 4: minikms.v1.ManagedAuth
-	(*CreateSessionResponse)(nil),         // 5: minikms.v1.CreateSessionResponse
-	(*ValidateSessionRequest)(nil),        // 6: minikms.v1.ValidateSessionRequest
-	(*ValidateSessionResponse)(nil),       // 7: minikms.v1.ValidateSessionResponse
-	(*RevokeSessionRequest)(nil),          // 8: minikms.v1.RevokeSessionRequest
-	(*RevokeSessionResponse)(nil),         // 9: minikms.v1.RevokeSessionResponse
-	(*RevokeMemberSessionsRequest)(nil),   // 10: minikms.v1.RevokeMemberSessionsRequest
-	(*RevokeMemberSessionsResponse)(nil),  // 11: minikms.v1.RevokeMemberSessionsResponse
-	(*ListSessionsRequest)(nil),           // 12: minikms.v1.ListSessionsRequest
-	(*ListSessionsResponse)(nil),          // 13: minikms.v1.ListSessionsResponse
-	(*SessionInfo)(nil),                   // 14: minikms.v1.SessionInfo
-	(*timestamppb.Timestamp)(nil),         // 15: google.protobuf.Timestamp
+	(*CreateSessionResponse)(nil),         // 4: minikms.v1.CreateSessionResponse
+	(*ValidateSessionRequest)(nil),        // 5: minikms.v1.ValidateSessionRequest
+	(*ValidateSessionResponse)(nil),       // 6: minikms.v1.ValidateSessionResponse
+	(*RevokeSessionRequest)(nil),          // 7: minikms.v1.RevokeSessionRequest
+	(*RevokeSessionResponse)(nil),         // 8: minikms.v1.RevokeSessionResponse
+	(*RevokeMemberSessionsRequest)(nil),   // 9: minikms.v1.RevokeMemberSessionsRequest
+	(*RevokeMemberSessionsResponse)(nil),  // 10: minikms.v1.RevokeMemberSessionsResponse
+	(*ListSessionsRequest)(nil),           // 11: minikms.v1.ListSessionsRequest
+	(*ListSessionsResponse)(nil),          // 12: minikms.v1.ListSessionsResponse
+	(*SessionInfo)(nil),                   // 13: minikms.v1.SessionInfo
+	(*timestamppb.Timestamp)(nil),         // 14: google.protobuf.Timestamp
 }
 var file_api_proto_minikms_v1_session_proto_depIdxs = []int32{
-	15, // 0: minikms.v1.IssueSessionChallengeResponse.expires_at:type_name -> google.protobuf.Timestamp
+	14, // 0: minikms.v1.IssueSessionChallengeResponse.expires_at:type_name -> google.protobuf.Timestamp
 	3,  // 1: minikms.v1.CreateSessionRequest.cert_auth:type_name -> minikms.v1.CertAuth
-	4,  // 2: minikms.v1.CreateSessionRequest.managed_auth:type_name -> minikms.v1.ManagedAuth
-	15, // 3: minikms.v1.CreateSessionResponse.expires_at:type_name -> google.protobuf.Timestamp
-	15, // 4: minikms.v1.ValidateSessionResponse.expires_at:type_name -> google.protobuf.Timestamp
-	14, // 5: minikms.v1.ListSessionsResponse.sessions:type_name -> minikms.v1.SessionInfo
-	15, // 6: minikms.v1.SessionInfo.issued_at:type_name -> google.protobuf.Timestamp
-	15, // 7: minikms.v1.SessionInfo.expires_at:type_name -> google.protobuf.Timestamp
-	0,  // 8: minikms.v1.SessionService.IssueSessionChallenge:input_type -> minikms.v1.IssueSessionChallengeRequest
-	2,  // 9: minikms.v1.SessionService.CreateSession:input_type -> minikms.v1.CreateSessionRequest
-	6,  // 10: minikms.v1.SessionService.ValidateSession:input_type -> minikms.v1.ValidateSessionRequest
-	8,  // 11: minikms.v1.SessionService.RevokeSession:input_type -> minikms.v1.RevokeSessionRequest
-	10, // 12: minikms.v1.SessionService.RevokeMemberSessions:input_type -> minikms.v1.RevokeMemberSessionsRequest
-	12, // 13: minikms.v1.SessionService.ListSessions:input_type -> minikms.v1.ListSessionsRequest
-	1,  // 14: minikms.v1.SessionService.IssueSessionChallenge:output_type -> minikms.v1.IssueSessionChallengeResponse
-	5,  // 15: minikms.v1.SessionService.CreateSession:output_type -> minikms.v1.CreateSessionResponse
-	7,  // 16: minikms.v1.SessionService.ValidateSession:output_type -> minikms.v1.ValidateSessionResponse
-	9,  // 17: minikms.v1.SessionService.RevokeSession:output_type -> minikms.v1.RevokeSessionResponse
-	11, // 18: minikms.v1.SessionService.RevokeMemberSessions:output_type -> minikms.v1.RevokeMemberSessionsResponse
-	13, // 19: minikms.v1.SessionService.ListSessions:output_type -> minikms.v1.ListSessionsResponse
-	14, // [14:20] is the sub-list for method output_type
-	8,  // [8:14] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	14, // 2: minikms.v1.CreateSessionResponse.expires_at:type_name -> google.protobuf.Timestamp
+	14, // 3: minikms.v1.ValidateSessionResponse.expires_at:type_name -> google.protobuf.Timestamp
+	13, // 4: minikms.v1.ListSessionsResponse.sessions:type_name -> minikms.v1.SessionInfo
+	14, // 5: minikms.v1.SessionInfo.issued_at:type_name -> google.protobuf.Timestamp
+	14, // 6: minikms.v1.SessionInfo.expires_at:type_name -> google.protobuf.Timestamp
+	0,  // 7: minikms.v1.SessionService.IssueSessionChallenge:input_type -> minikms.v1.IssueSessionChallengeRequest
+	2,  // 8: minikms.v1.SessionService.CreateSession:input_type -> minikms.v1.CreateSessionRequest
+	5,  // 9: minikms.v1.SessionService.ValidateSession:input_type -> minikms.v1.ValidateSessionRequest
+	7,  // 10: minikms.v1.SessionService.RevokeSession:input_type -> minikms.v1.RevokeSessionRequest
+	9,  // 11: minikms.v1.SessionService.RevokeMemberSessions:input_type -> minikms.v1.RevokeMemberSessionsRequest
+	11, // 12: minikms.v1.SessionService.ListSessions:input_type -> minikms.v1.ListSessionsRequest
+	1,  // 13: minikms.v1.SessionService.IssueSessionChallenge:output_type -> minikms.v1.IssueSessionChallengeResponse
+	4,  // 14: minikms.v1.SessionService.CreateSession:output_type -> minikms.v1.CreateSessionResponse
+	6,  // 15: minikms.v1.SessionService.ValidateSession:output_type -> minikms.v1.ValidateSessionResponse
+	8,  // 16: minikms.v1.SessionService.RevokeSession:output_type -> minikms.v1.RevokeSessionResponse
+	10, // 17: minikms.v1.SessionService.RevokeMemberSessions:output_type -> minikms.v1.RevokeMemberSessionsResponse
+	12, // 18: minikms.v1.SessionService.ListSessions:output_type -> minikms.v1.ListSessionsResponse
+	13, // [13:19] is the sub-list for method output_type
+	7,  // [7:13] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_minikms_v1_session_proto_init() }
@@ -1032,17 +921,13 @@ func file_api_proto_minikms_v1_session_proto_init() {
 	if File_api_proto_minikms_v1_session_proto != nil {
 		return
 	}
-	file_api_proto_minikms_v1_session_proto_msgTypes[2].OneofWrappers = []any{
-		(*CreateSessionRequest_CertAuth)(nil),
-		(*CreateSessionRequest_ManagedAuth)(nil),
-	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_minikms_v1_session_proto_rawDesc), len(file_api_proto_minikms_v1_session_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   15,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

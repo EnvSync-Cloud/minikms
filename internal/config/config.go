@@ -19,12 +19,10 @@ type Config struct {
 	SessionSigningKey     string `envconfig:"MINIKMS_SESSION_SIGNING_KEY"`
 	SessionSigningKeyFile string `envconfig:"MINIKMS_SESSION_SIGNING_KEY_FILE"`
 
-	// Serial-only vault sessions. Default true for one release; set false to require cert proof.
-	AllowManagedSessions bool `envconfig:"MINIKMS_ALLOW_MANAGED_SESSIONS" default:"true"`
-
 	TLSEnabled bool   `envconfig:"MINIKMS_TLS_ENABLED" default:"false"`
 	TLSCert    string `envconfig:"MINIKMS_TLS_CERT"`
 	TLSKey     string `envconfig:"MINIKMS_TLS_KEY"`
+	TLSCAFile  string `envconfig:"MINIKMS_TLS_CA_FILE"`
 
 	// Rate limiting
 	RateLimitPerSecond int `envconfig:"MINIKMS_RATE_LIMIT_PER_SECOND" default:"100"`

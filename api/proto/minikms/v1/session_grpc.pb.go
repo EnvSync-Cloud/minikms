@@ -38,8 +38,7 @@ type SessionServiceClient interface {
 	// CreateSessionByCert must sign this nonce; client-chosen nonces are rejected.
 	IssueSessionChallenge(ctx context.Context, in *IssueSessionChallengeRequest, opts ...grpc.CallOption) (*IssueSessionChallengeResponse, error)
 	// CreateSession authenticates a member and issues a session token.
-	// Preferred: cert_auth (member signs a server-issued nonce).
-	// managed_auth is a serial-only shortcut; disable with MINIKMS_ALLOW_MANAGED_SESSIONS=false.
+	// CreateSession requires cert_auth: the member must sign a server-issued nonce.
 	CreateSession(ctx context.Context, in *CreateSessionRequest, opts ...grpc.CallOption) (*CreateSessionResponse, error)
 	// ValidateSession checks if a session token is still valid.
 	ValidateSession(ctx context.Context, in *ValidateSessionRequest, opts ...grpc.CallOption) (*ValidateSessionResponse, error)
@@ -130,8 +129,7 @@ type SessionServiceServer interface {
 	// CreateSessionByCert must sign this nonce; client-chosen nonces are rejected.
 	IssueSessionChallenge(context.Context, *IssueSessionChallengeRequest) (*IssueSessionChallengeResponse, error)
 	// CreateSession authenticates a member and issues a session token.
-	// Preferred: cert_auth (member signs a server-issued nonce).
-	// managed_auth is a serial-only shortcut; disable with MINIKMS_ALLOW_MANAGED_SESSIONS=false.
+	// CreateSession requires cert_auth: the member must sign a server-issued nonce.
 	CreateSession(context.Context, *CreateSessionRequest) (*CreateSessionResponse, error)
 	// ValidateSession checks if a session token is still valid.
 	ValidateSession(context.Context, *ValidateSessionRequest) (*ValidateSessionResponse, error)

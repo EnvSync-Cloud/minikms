@@ -2,6 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"log"
 	"os"
@@ -80,10 +85,37 @@ func verifyVaultSessionAcrossReplicas(ctx context.Context, first, second grpc.Cl
 	}
 
 	sessions := pb.NewSessionServiceClient(first)
+	challenge, err := sessions.IssueSessionChallenge(ctx, &pb.IssueSessionChallengeRequest{CertSerial: member.SerialHex})
+	if err != nil {
+		log.Fatalf("issue session challenge: %v", err)
+	}
+	block, _ := pem.Decode([]byte(member.KeyPem))
+	if block == nil {
+		log.Fatal("member key pem")
+	}
+	key, err := x509.ParseECPrivateKey(block.Bytes)
+	if err != nil {
+		parsed, err2 := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err2 != nil {
+			log.Fatalf("parse member key: %v / %v", err, err2)
+		}
+		var ok bool
+		key, ok = parsed.(*ecdsa.PrivateKey)
+		if !ok {
+			log.Fatal("member key is not ecdsa")
+		}
+	}
+	hash := sha256.Sum256(challenge.Nonce)
+	sig, err := ecdsa.SignASN1(rand.Reader, key, hash[:])
+	if err != nil {
+		log.Fatalf("sign challenge: %v", err)
+	}
 	session, err := sessions.CreateSession(ctx, &pb.CreateSessionRequest{
-		Auth: &pb.CreateSessionRequest_ManagedAuth{ManagedAuth: &pb.ManagedAuth{
-			MemberId: memberID, OrgId: orgID, CertSerial: member.SerialHex,
-		}},
+		CertAuth: &pb.CertAuth{
+			CertPem:     member.CertPem,
+			SignedNonce: sig,
+			Nonce:       challenge.Nonce,
+		},
 		Scopes: []string{"vault:read", "vault:write"},
 	})
 	if err != nil {

@@ -36,8 +36,7 @@ type SessionService struct {
 	certStore   pkistore.Store
 	policyStore           SessionPolicyStore
 	auditLogger           *audit.AuditLogger
-	challenges            ChallengeStore
-	allowManagedSessions  bool
+	challenges ChallengeStore
 }
 
 // NewSessionService creates a new SessionService.
@@ -58,8 +57,7 @@ func NewSessionService(
 		certStore:   certStore,
 		policyStore:          policyStore,
 		auditLogger:          auditLogger,
-		challenges:           NewMemoryChallengeStore(),
-		allowManagedSessions: true,
+		challenges: NewMemoryChallengeStore(),
 	}
 }
 
@@ -67,10 +65,6 @@ func (s *SessionService) SetChallengeStore(store ChallengeStore) {
 	if store != nil {
 		s.challenges = store
 	}
-}
-
-func (s *SessionService) SetAllowManagedSessions(allow bool) {
-	s.allowManagedSessions = allow
 }
 
 type IssueSessionChallengeResponse struct {
@@ -113,14 +107,6 @@ type CreateSessionByCertRequest struct {
 	SignedNonce []byte
 	Nonce       []byte
 	Scopes      []string
-}
-
-// CreateSessionManagedRequest represents a web/managed auth request.
-type CreateSessionManagedRequest struct {
-	MemberID   string
-	OrgID      string
-	CertSerial string
-	Scopes     []string
 }
 
 // CreateSessionResponse represents the result of session creation.
@@ -216,57 +202,6 @@ func (s *SessionService) CreateSessionByCert(ctx context.Context, req *CreateSes
 
 	// Issue session token
 	return s.issueSessionToken(ctx, memberID, orgID, role, serialHex, scopes)
-}
-
-// CreateSessionManaged creates a session for a managed/web member (pre-authenticated via OIDC).
-func (s *SessionService) CreateSessionManaged(ctx context.Context, req *CreateSessionManagedRequest) (*CreateSessionResponse, error) {
-	if !s.allowManagedSessions {
-		return nil, NewDomainError(ErrorFailedPrecondition, "managed sessions are disabled; use certificate proof", nil)
-	}
-	if req == nil {
-		return nil, invalidArgument("request is required")
-	}
-	if err := requireFields(
-		requiredField("member_id", req.MemberID),
-		requiredField("org_id", req.OrgID),
-		requiredField("cert_serial", req.CertSerial),
-	); err != nil {
-		return nil, err
-	}
-
-	// Verify the cert exists and is active
-	certRecord, err := s.certStore.GetCertificateBySerial(ctx, req.CertSerial)
-	if err != nil {
-		return nil, internalError("failed to check certificate status", err)
-	}
-	if certRecord == nil {
-		return nil, NewDomainError(ErrorUnauthenticated, "managed authentication failed",
-			fmt.Errorf("certificate not found"))
-	}
-	if certRecord.Status != "active" {
-		return nil, NewDomainError(ErrorUnauthenticated, "managed authentication failed",
-			fmt.Errorf("certificate is not active"))
-	}
-	if certRecord.OrgID != req.OrgID {
-		return nil, NewDomainError(ErrorUnauthenticated, "managed authentication failed",
-			fmt.Errorf("certificate organization mismatch"))
-	}
-
-	// Parse cert to extract role
-	block, _ := pem.Decode([]byte(certRecord.CertPEM))
-	if block == nil {
-		return nil, internalError("invalid stored certificate PEM", nil)
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, internalError("failed to parse stored certificate", err)
-	}
-	role := pki.ExtractOIDValue(cert, pki.OIDRole)
-
-	// Determine scopes
-	scopes := s.resolveScopes(req.Scopes, role)
-
-	return s.issueSessionToken(ctx, req.MemberID, req.OrgID, role, req.CertSerial, scopes)
 }
 
 // ValidateSessionRequest represents a session validation request.

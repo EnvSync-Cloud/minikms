@@ -343,14 +343,19 @@ func setupVaultTest(t *testing.T) *vaultTestCtx {
 
 func createVaultSessionToken(t *testing.T, tc *vaultTestCtx, scopes []string) string {
 	t.Helper()
-	resp, err := tc.sessionSvc.CreateSessionManaged(context.Background(), &CreateSessionManagedRequest{
-		MemberID:   "member-001",
-		OrgID:      "org-001",
-		CertSerial: tc.memberSerial,
-		Scopes:     scopes,
+	nonce, sig := signIssuedChallenge(t, tc.sessionSvc, tc.memberKey, tc.memberSerial)
+	cert, err := tc.certStore.GetCertificateBySerial(context.Background(), tc.memberSerial)
+	if err != nil || cert == nil {
+		t.Fatalf("load member cert: %v", err)
+	}
+	resp, err := tc.sessionSvc.CreateSessionByCert(context.Background(), &CreateSessionByCertRequest{
+		CertPEM:     cert.CertPEM,
+		SignedNonce: sig,
+		Nonce:       nonce,
+		Scopes:      scopes,
 	})
 	if err != nil {
-		t.Fatalf("CreateSessionManaged: %v", err)
+		t.Fatalf("CreateSessionByCert: %v", err)
 	}
 	return resp.SessionToken
 }
@@ -568,15 +573,7 @@ func TestVaultDelete(t *testing.T) {
 	tc := setupVaultTest(t)
 	ctx := context.Background()
 
-	// Create session with admin role (has vault:delete)
-	resp, err := tc.sessionSvc.CreateSessionManaged(ctx, &CreateSessionManagedRequest{
-		MemberID: "member-001", OrgID: "org-001", CertSerial: tc.memberSerial,
-		Scopes: []string{"vault:read", "vault:write", "vault:delete"},
-	})
-	if err != nil {
-		t.Fatalf("CreateSessionManaged: %v", err)
-	}
-	token := resp.SessionToken
+	token := createVaultSessionToken(t, tc, []string{"vault:read", "vault:write", "vault:delete"})
 
 	// Write
 	_, _ = tc.vaultSvc.Write(ctx, token, &VaultWriteRequest{
@@ -585,7 +582,7 @@ func TestVaultDelete(t *testing.T) {
 	})
 
 	// Delete
-	err = tc.vaultSvc.Delete(ctx, token, &VaultDeleteRequest{
+	err := tc.vaultSvc.Delete(ctx, token, &VaultDeleteRequest{
 		OrgID: "org-001", ScopeID: "s1", EntryType: "env", Key: "DEL",
 	})
 	if err != nil {
