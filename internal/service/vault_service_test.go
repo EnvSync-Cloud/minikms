@@ -259,7 +259,7 @@ func setupVaultTest(t *testing.T) *vaultTestCtx {
 	certStore := newMockCertStore()
 	policyStore := newMockPolicyStore()
 
-	sessionSvc := NewSessionService(signingKey, "test-issuer", 1*time.Hour, tokenRegistry, certStore, policyStore, auditLogger)
+	sessionSvc := NewSessionService(signingKey, "test-issuer", 1*time.Hour, tokenRegistry, certStore, policyStore, auditLogger, store.NewMemoryChallengeStore())
 
 	// Generate PKI chain: root CA → org CA
 	rootKey, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)

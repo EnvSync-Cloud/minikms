@@ -33,40 +33,28 @@ import (
 	"github.com/envsync-cloud/minikms/internal/store"
 )
 
-type redisChallengeStore struct {
-	redis *store.RedisStore
-}
-
-func (r redisChallengeStore) Put(ctx context.Context, nonce []byte, certSerial string, ttl time.Duration) error {
-	return r.redis.PutSessionChallenge(ctx, nonce, certSerial, ttl)
-}
-
-func (r redisChallengeStore) Consume(ctx context.Context, nonce []byte) (string, bool, error) {
-	return r.redis.ConsumeSessionChallenge(ctx, nonce)
-}
-
 func loadMTLSServerCreds(cfg *config.Config) (credentials.TransportCredentials, error) {
+	if cfg.TLSCAFile == "" {
+		return nil, fmt.Errorf("MINIKMS_TLS_CA_FILE is required when MINIKMS_TLS_ENABLED=true")
+	}
 	cert, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
 	if err != nil {
 		return nil, fmt.Errorf("load server keypair: %w", err)
 	}
-	tlsCfg := &tls.Config{
+	pemBytes, err := os.ReadFile(cfg.TLSCAFile)
+	if err != nil {
+		return nil, fmt.Errorf("read client CA: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("parse client CA")
+	}
+	return credentials.NewTLS(&tls.Config{
 		Certificates: []tls.Certificate{cert},
+		ClientCAs:    pool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
 		MinVersion:   tls.VersionTLS13,
-	}
-	if cfg.TLSCAFile != "" {
-		pemBytes, err := os.ReadFile(cfg.TLSCAFile)
-		if err != nil {
-			return nil, fmt.Errorf("read client CA: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pemBytes) {
-			return nil, fmt.Errorf("parse client CA")
-		}
-		tlsCfg.ClientCAs = pool
-		tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
-	}
-	return credentials.NewTLS(tlsCfg), nil
+	}), nil
 }
 
 func main() {
@@ -184,13 +172,13 @@ func main() {
 	sessionSvc := service.NewSessionService(
 		sessionSigningKey,
 		"minikms",
-		8*time.Hour, // default session TTL
-		pgStore,     // token registry
-		pgStore,     // cert store
-		pgStore,     // policy store
+		8*time.Hour,
+		pgStore,
+		pgStore,
+		pgStore,
 		auditLogger,
+		redisStore,
 	)
-	sessionSvc.SetChallengeStore(redisChallengeStore{redisStore})
 
 	vaultSvc := service.NewVaultService(
 		dekManager,

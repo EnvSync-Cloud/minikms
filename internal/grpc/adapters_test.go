@@ -16,6 +16,7 @@ import (
 	"github.com/envsync-cloud/minikms/internal/audit"
 	"github.com/envsync-cloud/minikms/internal/keys"
 	"github.com/envsync-cloud/minikms/internal/service"
+	"github.com/envsync-cloud/minikms/internal/store"
 	"github.com/envsync-cloud/minikms/internal/testutil"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -652,7 +653,7 @@ func setupSessionAdapter(t *testing.T) (*SessionAdapter, *testutil.MockPKICertSt
 	certStore := testutil.NewMockPKICertStore()
 	policyStore := testutil.NewMockPolicyStore()
 
-	sessionSvc := service.NewSessionService(signingKey, "test-issuer", time.Hour, registry, certStore, policyStore, auditLogger)
+	sessionSvc := service.NewSessionService(signingKey, "test-issuer", time.Hour, registry, certStore, policyStore, auditLogger, store.NewMemoryChallengeStore())
 	return NewSessionAdapter(sessionSvc), certStore
 }
 

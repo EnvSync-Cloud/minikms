@@ -1,4 +1,4 @@
-package service
+package store
 
 import (
 	"context"
@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"sync"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
-const sessionChallengeTTL = 60 * time.Second
+const SessionChallengeTTL = 60 * time.Second
 
 // ChallengeStore binds a single-use nonce to a certificate serial.
 type ChallengeStore interface {
@@ -16,12 +18,17 @@ type ChallengeStore interface {
 	Consume(ctx context.Context, nonce []byte) (certSerial string, ok bool, err error)
 }
 
+func challengeNonceKey(nonce []byte) string {
+	sum := sha256.Sum256(nonce)
+	return hex.EncodeToString(sum[:])
+}
+
 type challengeEntry struct {
 	serial    string
 	expiresAt time.Time
 }
 
-// MemoryChallengeStore is for tests and single-replica fallback.
+// MemoryChallengeStore is a test fake. Production uses Redis.
 type MemoryChallengeStore struct {
 	mu      sync.Mutex
 	entries map[string]challengeEntry
@@ -31,15 +38,10 @@ func NewMemoryChallengeStore() *MemoryChallengeStore {
 	return &MemoryChallengeStore{entries: make(map[string]challengeEntry)}
 }
 
-func challengeKey(nonce []byte) string {
-	sum := sha256.Sum256(nonce)
-	return hex.EncodeToString(sum[:])
-}
-
 func (s *MemoryChallengeStore) Put(_ context.Context, nonce []byte, certSerial string, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entries[challengeKey(nonce)] = challengeEntry{
+	s.entries[challengeNonceKey(nonce)] = challengeEntry{
 		serial:    certSerial,
 		expiresAt: time.Now().Add(ttl),
 	}
@@ -49,7 +51,7 @@ func (s *MemoryChallengeStore) Put(_ context.Context, nonce []byte, certSerial s
 func (s *MemoryChallengeStore) Consume(_ context.Context, nonce []byte) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := challengeKey(nonce)
+	key := challengeNonceKey(nonce)
 	entry, ok := s.entries[key]
 	if !ok {
 		return "", false, nil
@@ -59,4 +61,19 @@ func (s *MemoryChallengeStore) Consume(_ context.Context, nonce []byte) (string,
 		return "", false, nil
 	}
 	return entry.serial, true, nil
+}
+
+func (s *RedisStore) Put(ctx context.Context, nonce []byte, certSerial string, ttl time.Duration) error {
+	return s.client.Set(ctx, "session-challenge:"+challengeNonceKey(nonce), certSerial, ttl).Err()
+}
+
+func (s *RedisStore) Consume(ctx context.Context, nonce []byte) (string, bool, error) {
+	serial, err := s.client.GetDel(ctx, "session-challenge:"+challengeNonceKey(nonce)).Result()
+	if err == redis.Nil {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return serial, true, nil
 }

@@ -34,12 +34,11 @@ type SessionService struct {
 	defaultTTL  time.Duration
 	registry    auth.TokenRegistry
 	certStore   pkistore.Store
-	policyStore           SessionPolicyStore
-	auditLogger           *audit.AuditLogger
-	challenges ChallengeStore
+	policyStore SessionPolicyStore
+	auditLogger *audit.AuditLogger
+	challenges  store.ChallengeStore
 }
 
-// NewSessionService creates a new SessionService.
 func NewSessionService(
 	signingKey *ecdsa.PrivateKey,
 	issuer string,
@@ -48,6 +47,7 @@ func NewSessionService(
 	certStore pkistore.Store,
 	policyStore SessionPolicyStore,
 	auditLogger *audit.AuditLogger,
+	challenges store.ChallengeStore,
 ) *SessionService {
 	return &SessionService{
 		signingKey:  signingKey,
@@ -55,15 +55,9 @@ func NewSessionService(
 		defaultTTL:  defaultTTL,
 		registry:    registry,
 		certStore:   certStore,
-		policyStore:          policyStore,
-		auditLogger:          auditLogger,
-		challenges: NewMemoryChallengeStore(),
-	}
-}
-
-func (s *SessionService) SetChallengeStore(store ChallengeStore) {
-	if store != nil {
-		s.challenges = store
+		policyStore: policyStore,
+		auditLogger: auditLogger,
+		challenges:  challenges,
 	}
 }
 
@@ -76,19 +70,24 @@ func (s *SessionService) IssueSessionChallenge(ctx context.Context, certSerial s
 	if certSerial == "" {
 		return nil, invalidArgument("cert_serial is required")
 	}
-	if s.challenges == nil {
-		return nil, NewDomainError(ErrorFailedPrecondition, "session challenge store is not initialized", nil)
+	certRecord, err := s.certStore.GetCertificateBySerial(ctx, certSerial)
+	if err != nil {
+		return nil, internalError("failed to check certificate status", err)
+	}
+	if certRecord == nil || certRecord.Status != "active" {
+		return nil, NewDomainError(ErrorUnauthenticated, "certificate authentication failed",
+			fmt.Errorf("certificate not found or not active"))
 	}
 	nonce, err := GenerateNonce()
 	if err != nil {
 		return nil, err
 	}
-	if err := s.challenges.Put(ctx, nonce, certSerial, sessionChallengeTTL); err != nil {
+	if err := s.challenges.Put(ctx, nonce, certSerial, store.SessionChallengeTTL); err != nil {
 		return nil, internalError("failed to store session challenge", err)
 	}
 	return &IssueSessionChallengeResponse{
 		Nonce:     nonce,
-		ExpiresAt: time.Now().Add(sessionChallengeTTL),
+		ExpiresAt: time.Now().Add(store.SessionChallengeTTL),
 	}, nil
 }
 
@@ -131,43 +130,11 @@ func (s *SessionService) CreateSessionByCert(ctx context.Context, req *CreateSes
 		return nil, invalidArgument("signed_nonce is required")
 	}
 
-	// Parse the member certificate
-	block, _ := pem.Decode([]byte(req.CertPEM))
-	if block == nil {
-		return nil, NewDomainError(ErrorUnauthenticated, "certificate authentication failed", fmt.Errorf("invalid PEM certificate"))
-	}
-
-	cert, err := x509.ParseCertificate(block.Bytes)
+	cert, memberID, orgID, role, serialHex, err := parseMemberCertProof(req.CertPEM, req.Nonce, req.SignedNonce)
 	if err != nil {
-		return nil, NewDomainError(ErrorUnauthenticated, "certificate authentication failed", err)
+		return nil, err
 	}
 
-	// Extract ECDSA public key
-	pubKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
-	if !ok {
-		return nil, NewDomainError(ErrorUnauthenticated, "certificate authentication failed",
-			fmt.Errorf("certificate does not contain an ECDSA public key"))
-	}
-
-	// Verify the signed nonce
-	hash := sha256.Sum256(req.Nonce)
-	if !ecdsa.VerifyASN1(pubKey, hash[:], req.SignedNonce) {
-		return nil, NewDomainError(ErrorUnauthenticated, "certificate authentication failed",
-			fmt.Errorf("nonce signature verification failed"))
-	}
-
-	// Extract custom OIDs from cert
-	memberID := pki.ExtractOIDValue(cert, pki.OIDMemberID)
-	orgID := pki.ExtractOIDValue(cert, pki.OIDOrgID)
-	role := pki.ExtractOIDValue(cert, pki.OIDRole)
-	serialHex := cert.SerialNumber.Text(16)
-
-	if memberID == "" || orgID == "" {
-		return nil, NewDomainError(ErrorUnauthenticated, "certificate authentication failed",
-			fmt.Errorf("certificate missing required OIDs"))
-	}
-
-	// Verify cert is not revoked
 	certRecord, err := s.certStore.GetCertificateBySerial(ctx, serialHex)
 	if err != nil {
 		return nil, internalError("failed to check certificate status", err)
@@ -185,9 +152,6 @@ func (s *SessionService) CreateSessionByCert(ctx context.Context, req *CreateSes
 			fmt.Errorf("certificate has expired"))
 	}
 
-	if s.challenges == nil {
-		return nil, NewDomainError(ErrorFailedPrecondition, "session challenge store is not initialized", nil)
-	}
 	boundSerial, ok, err := s.challenges.Consume(ctx, req.Nonce)
 	if err != nil {
 		return nil, internalError("failed to consume session challenge", err)
@@ -202,6 +166,36 @@ func (s *SessionService) CreateSessionByCert(ctx context.Context, req *CreateSes
 
 	// Issue session token
 	return s.issueSessionToken(ctx, memberID, orgID, role, serialHex, scopes)
+}
+
+func parseMemberCertProof(certPEM string, nonce, signedNonce []byte) (*x509.Certificate, string, string, string, string, error) {
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		return nil, "", "", "", "", NewDomainError(ErrorUnauthenticated, "certificate authentication failed", fmt.Errorf("invalid PEM certificate"))
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, "", "", "", "", NewDomainError(ErrorUnauthenticated, "certificate authentication failed", err)
+	}
+	pubKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, "", "", "", "", NewDomainError(ErrorUnauthenticated, "certificate authentication failed",
+			fmt.Errorf("certificate does not contain an ECDSA public key"))
+	}
+	hash := sha256.Sum256(nonce)
+	if !ecdsa.VerifyASN1(pubKey, hash[:], signedNonce) {
+		return nil, "", "", "", "", NewDomainError(ErrorUnauthenticated, "certificate authentication failed",
+			fmt.Errorf("nonce signature verification failed"))
+	}
+	memberID := pki.ExtractOIDValue(cert, pki.OIDMemberID)
+	orgID := pki.ExtractOIDValue(cert, pki.OIDOrgID)
+	role := pki.ExtractOIDValue(cert, pki.OIDRole)
+	serialHex := cert.SerialNumber.Text(16)
+	if memberID == "" || orgID == "" {
+		return nil, "", "", "", "", NewDomainError(ErrorUnauthenticated, "certificate authentication failed",
+			fmt.Errorf("certificate missing required OIDs"))
+	}
+	return cert, memberID, orgID, role, serialHex, nil
 }
 
 // ValidateSessionRequest represents a session validation request.
