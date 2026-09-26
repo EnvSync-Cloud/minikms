@@ -2,20 +2,18 @@ package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"log"
 	"os"
 	"time"
 
 	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
+	"github.com/envsync-cloud/minikms/examples/internal/sessionproof"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 func main() {
@@ -85,44 +83,12 @@ func verifyVaultSessionAcrossReplicas(ctx context.Context, first, second grpc.Cl
 	}
 
 	sessions := pb.NewSessionServiceClient(first)
-	challenge, err := sessions.IssueSessionChallenge(ctx, &pb.IssueSessionChallengeRequest{CertSerial: member.SerialHex})
-	if err != nil {
-		log.Fatalf("issue session challenge: %v", err)
-	}
-	block, _ := pem.Decode([]byte(member.KeyPem))
-	if block == nil {
-		log.Fatal("member key pem")
-	}
-	key, err := x509.ParseECPrivateKey(block.Bytes)
-	if err != nil {
-		parsed, err2 := x509.ParsePKCS8PrivateKey(block.Bytes)
-		if err2 != nil {
-			log.Fatalf("parse member key: %v / %v", err, err2)
-		}
-		var ok bool
-		key, ok = parsed.(*ecdsa.PrivateKey)
-		if !ok {
-			log.Fatal("member key is not ecdsa")
-		}
-	}
-	hash := sha256.Sum256(challenge.Nonce)
-	sig, err := ecdsa.SignASN1(rand.Reader, key, hash[:])
-	if err != nil {
-		log.Fatalf("sign challenge: %v", err)
-	}
-	session, err := sessions.CreateSession(ctx, &pb.CreateSessionRequest{
-		CertAuth: &pb.CertAuth{
-			CertPem:     member.CertPem,
-			SignedNonce: sig,
-			Nonce:       challenge.Nonce,
-		},
-		Scopes: []string{"vault:read", "vault:write"},
-	})
+	token, err := sessionproof.Mint(ctx, sessions, member.CertPem, member.KeyPem, member.SerialHex, []string{"vault:read", "vault:write"})
 	if err != nil {
 		log.Fatalf("create session through replica 1: %v", err)
 	}
 
-	authorized := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+session.SessionToken)
+	authorized := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 	layerOne := []byte("layer-one-client-ciphertext")
 	vaultFirst := pb.NewVaultServiceClient(first)
 	vaultSecond := pb.NewVaultServiceClient(second)
@@ -141,6 +107,29 @@ func verifyVaultSessionAcrossReplicas(ctx context.Context, first, second grpc.Cl
 	}
 	if string(read.EncryptedValue) != string(layerOne) {
 		log.Fatalf("cross-replica vault mismatch: got %q", read.EncryptedValue)
+	}
+
+	sessions2 := pb.NewSessionServiceClient(second)
+	if _, err := sessions2.ValidateSession(ctx, &pb.ValidateSessionRequest{SessionToken: token}); err != nil {
+		log.Fatalf("validate session on replica 2: %v", err)
+	}
+
+	if _, err := sessions.RevokeSession(ctx, &pb.RevokeSessionRequest{SessionToken: token}); err != nil {
+		log.Fatalf("revoke session on replica 1: %v", err)
+	}
+	if _, err := vaultSecond.Read(authorized, &pb.VaultReadRequest{
+		OrgId: orgID, ScopeId: "app-ha-vault", EntryType: "secret", Key: "DATABASE_URL",
+	}); err == nil {
+		log.Fatal("vault read after revoke succeeded on replica 2")
+	} else if status.Code(err) != codes.Unauthenticated && status.Code(err) != codes.PermissionDenied {
+		log.Fatalf("vault read after revoke: %v", err)
+	}
+
+	if _, err := pkiFirst.RevokeCert(ctx, &pb.RevokeCertRequest{SerialHex: member.SerialHex, OrgId: orgID}); err != nil {
+		log.Fatalf("revoke member cert: %v", err)
+	}
+	if _, err := sessionproof.Mint(ctx, sessions, member.CertPem, member.KeyPem, member.SerialHex, []string{"vault:read"}); err == nil {
+		log.Fatal("session minted for revoked member cert")
 	}
 }
 
