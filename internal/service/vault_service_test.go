@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/envsync-cloud/minikms/internal/crypto"
 	"github.com/envsync-cloud/minikms/internal/keys"
 	"github.com/envsync-cloud/minikms/internal/pki"
 	"github.com/envsync-cloud/minikms/internal/pkistore"
@@ -494,6 +496,110 @@ func TestVaultRead(t *testing.T) {
 	}
 	if len(resp.MemberWrapEphemeralPub) == 0 {
 		t.Error("MemberWrapEphemeralPub is empty for BYOK path")
+	}
+}
+
+func TestVaultRead_LegacyKMSAAD(t *testing.T) {
+	tc := setupVaultTest(t)
+	ctx := context.Background()
+	token := createVaultSessionToken(t, tc, []string{"vault:read", "vault:write"})
+
+	if _, err := tc.vaultSvc.Write(ctx, token, &VaultWriteRequest{
+		OrgID: "org-001", ScopeID: "scope-1", EntryType: "env", Key: "SEED",
+		Value: []byte("seed"), CreatedBy: "member-001",
+	}); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+
+	dek, keyVersionID, err := tc.dekManager.GetOrCreateDEK(ctx, "org-001", "scope-1")
+	if err != nil {
+		t.Fatalf("dek: %v", err)
+	}
+	defer crypto.ZeroizeBytes(dek)
+
+	ecies, err := crypto.ECIESEncrypt(&tc.orgCAKey.PublicKey, []byte("legacy-value"), "envsync-ecies-v1", "org-001", []byte("org-001"))
+	if err != nil {
+		t.Fatalf("ecies: %v", err)
+	}
+	// Sealed without the env type, while the row records one. Current reads
+	// must still recover the value.
+	kms, err := crypto.Encrypt(dek, ecies, []byte("env:org-001:scope-1:LEGACY"))
+	if err != nil {
+		t.Fatalf("kms: %v", err)
+	}
+	envType := "env-type-1"
+	if err := tc.vaultStore.WriteVaultEntry(ctx, &store.VaultEntry{
+		OrgID: "org-001", ScopeID: "scope-1", EntryType: "env", Key: "LEGACY",
+		EnvTypeID: &envType, EncryptedValue: kms, KeyVersionID: keyVersionID, Version: 1,
+	}); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	resp, err := tc.vaultSvc.Read(ctx, token, &VaultReadRequest{
+		OrgID: "org-001", ScopeID: "scope-1", EntryType: "env", Key: "LEGACY",
+		EnvTypeID: &envType, ClientSideDecrypt: true,
+	})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if !bytes.Equal(resp.EncryptedValue, ecies) {
+		t.Fatal("legacy AAD was not accepted")
+	}
+}
+
+func TestVaultRead_DurableOrgCAWhenMemberWrapMissing(t *testing.T) {
+	tc := setupVaultTest(t)
+	ctx := context.Background()
+	token := createVaultSessionToken(t, tc, []string{"vault:read", "vault:write"})
+
+	if _, err := tc.vaultSvc.Write(ctx, token, &VaultWriteRequest{
+		OrgID: "org-001", ScopeID: "scope-1", EntryType: "env", Key: "SEED",
+		Value: []byte("seed"), CreatedBy: "member-001",
+	}); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	dek, keyVersionID, err := tc.dekManager.GetOrCreateDEK(ctx, "org-001", "scope-1")
+	if err != nil {
+		t.Fatalf("dek: %v", err)
+	}
+	defer crypto.ZeroizeBytes(dek)
+
+	plaintext := []byte("recreated-value")
+	ecies, err := crypto.ECIESEncrypt(&tc.orgCAKey.PublicKey, plaintext, "envsync-ecies-v1", "org-001", []byte("org-001"))
+	if err != nil {
+		t.Fatalf("ecies: %v", err)
+	}
+	envType := "env-type-1"
+	aad := fmt.Sprintf("env:org-001:scope-1:%s:ROTATED", envType)
+	kms, err := crypto.Encrypt(dek, ecies, []byte(aad))
+	if err != nil {
+		t.Fatalf("kms: %v", err)
+	}
+	if err := tc.vaultStore.WriteVaultEntry(ctx, &store.VaultEntry{
+		OrgID: "org-001", ScopeID: "scope-1", EntryType: "env", Key: "ROTATED",
+		EnvTypeID: &envType, EncryptedValue: kms, KeyVersionID: keyVersionID, Version: 2,
+	}); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	serial := tc.vaultStore.orgCerts["org-001"].SerialNumber
+	keyBytes := crypto.MarshalECPrivateKey(tc.orgCAKey)
+	sealed, err := tc.dekManager.EncryptOrgScoped("org-001", keyBytes, []byte("org-ca-key:org-001:"+serial))
+	crypto.ZeroizeBytes(keyBytes)
+	if err != nil {
+		t.Fatalf("seal org ca: %v", err)
+	}
+	tc.vaultStore.orgCerts["org-001"].EncryptedPrivateKey = sealed
+
+	resp, err := tc.vaultSvc.Read(ctx, token, &VaultReadRequest{
+		OrgID: "org-001", ScopeID: "scope-1", EntryType: "env", Key: "ROTATED",
+		EnvTypeID: &envType, ClientSideDecrypt: false,
+	})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if !bytes.Equal(resp.EncryptedValue, plaintext) {
+		t.Fatalf("managed read = %q, want %q", resp.EncryptedValue, plaintext)
 	}
 }
 

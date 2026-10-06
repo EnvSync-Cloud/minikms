@@ -223,3 +223,39 @@ func (m *AppDEKManager) decryptDEK(orgID string, encryptedDEK []byte) ([]byte, e
 	}
 	return dek, nil
 }
+
+// EncryptOrgScoped seals a blob with the org master key.
+func (m *AppDEKManager) EncryptOrgScoped(orgID string, plaintext, aad []byte) ([]byte, error) {
+	if m == nil || m.orgKeyMgr == nil {
+		return nil, fmt.Errorf("org key manager is not configured")
+	}
+	orgKey, err := m.orgKeyMgr.DeriveOrgKey(orgID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive org key: %w", err)
+	}
+	defer zeroize(orgKey)
+	sealed, err := crypto.Encrypt(orgKey, plaintext, aad)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt org-scoped blob: %w", err)
+	}
+	return sealed, nil
+}
+
+// DecryptOrgScoped decrypts a blob that was sealed with the org master key.
+// Vault reads use it to recover an Org CA private key when a member wrap lags
+// a CA rotation.
+func (m *AppDEKManager) DecryptOrgScoped(orgID string, ciphertext, aad []byte) ([]byte, error) {
+	if m == nil || m.orgKeyMgr == nil {
+		return nil, fmt.Errorf("org key manager is not configured")
+	}
+	orgKey, err := m.orgKeyMgr.DeriveOrgKey(orgID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive org key: %w", err)
+	}
+	defer zeroize(orgKey)
+	plain, err := crypto.Decrypt(orgKey, ciphertext, aad)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt org-scoped blob: %w", err)
+	}
+	return plain, nil
+}

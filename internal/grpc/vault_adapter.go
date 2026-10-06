@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"log"
 
 	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
 	"github.com/envsync-cloud/minikms/internal/service"
@@ -96,6 +97,7 @@ func (a *VaultAdapter) Read(ctx context.Context, req *pb.VaultReadRequest) (*pb.
 		ClientSideDecrypt: req.ClientSideDecrypt,
 	})
 	if err != nil {
+		log.Printf("vault read failed org=%s scope=%s type=%s key=%s: %v", req.OrgId, req.ScopeId, req.EntryType, req.Key, err)
 		return nil, toStatusError(err)
 	}
 

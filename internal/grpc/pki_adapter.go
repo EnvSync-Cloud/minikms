@@ -144,7 +144,7 @@ func (a *PKIAdapter) SignCSR(ctx context.Context, req *pb.SignCSRRequest) (*pb.S
 func (a *PKIAdapter) GetRootCA(ctx context.Context, _ *pb.GetRootCARequest) (*pb.GetRootCAResponse, error) {
 	rootCert := a.pkiSvc.RootCert()
 	if rootCert == nil {
-		return nil, status.Error(codes.Internal, "internal server error")
+		return nil, status.Error(codes.FailedPrecondition, "root CA is not configured")
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootCert.Raw})
 	return &pb.GetRootCAResponse{CertPem: string(certPEM)}, nil
