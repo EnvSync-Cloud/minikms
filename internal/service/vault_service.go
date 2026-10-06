@@ -473,12 +473,7 @@ func (v *VaultService) decryptEntry(ctx context.Context, session *ValidateSessio
 	}
 	defer zeroize(dek)
 
-	aad := fmt.Sprintf("%s:%s:%s:%s", entry.EntryType, entry.OrgID, entry.ScopeID, entry.Key)
-	if entry.EnvTypeID != nil {
-		aad = fmt.Sprintf("%s:%s:%s:%s:%s", entry.EntryType, entry.OrgID, entry.ScopeID, *entry.EnvTypeID, entry.Key)
-	}
-
-	eciesOutput, err := crypto.Decrypt(dek, entry.EncryptedValue, []byte(aad))
+	eciesOutput, err := decryptVaultKMS(dek, entry)
 	if err != nil {
 		return nil, internalError("KMS decryption failed", err)
 	}
@@ -512,15 +507,16 @@ func (v *VaultService) decryptEntry(ctx context.Context, session *ValidateSessio
 	} else {
 		// Managed path: server-side ECIES unwrap using member's managed key
 		// The server needs the member's private key to unwrap the Org CA key
-		orgCAPrivKey, err := v.unwrapOrgCAForManagedMember(ctx, entry.OrgID, session.MemberID)
-		if err != nil {
-			return nil, err
+		orgCAPrivKey, unwrapErr := v.unwrapOrgCAForManagedMember(ctx, entry.OrgID, session.MemberID)
+		if unwrapErr != nil {
+			orgCAPrivKey = nil
 		}
-
-		// ECIES decrypt
-		rsaBlob, err := crypto.ECIESDecrypt(orgCAPrivKey, eciesOutput, "envsync-ecies-v1", entry.OrgID, []byte(entry.OrgID))
+		rsaBlob, err := v.decryptVaultECIES(ctx, entry.OrgID, orgCAPrivKey, eciesOutput)
 		if err != nil {
-			return nil, internalError("ECIES decryption failed", err)
+			if unwrapErr != nil {
+				return nil, unwrapErr
+			}
+			return nil, err
 		}
 
 		resp.EncryptedValue = rsaBlob // Layer 1 output for envsync-api to handle
@@ -531,6 +527,74 @@ func (v *VaultService) decryptEntry(ctx context.Context, session *ValidateSessio
 			entry.ScopeID, entry.EntryType, entry.Key, entry.Version, entry.KeyVersionID), "")
 
 	return resp, nil
+}
+
+// decryptVaultKMS unwraps layer 3. Current writes bind the env type into the
+// AAD. Older rows were sealed without it, so a mismatch retries the other form
+// instead of hiding the value.
+func decryptVaultKMS(dek []byte, entry *store.VaultEntry) ([]byte, error) {
+	candidates := []string{fmt.Sprintf("%s:%s:%s:%s", entry.EntryType, entry.OrgID, entry.ScopeID, entry.Key)}
+	if entry.EnvTypeID != nil && *entry.EnvTypeID != "" {
+		withEnv := fmt.Sprintf("%s:%s:%s:%s:%s", entry.EntryType, entry.OrgID, entry.ScopeID, *entry.EnvTypeID, entry.Key)
+		candidates = []string{withEnv, candidates[0]}
+	}
+	var last error
+	for _, aad := range candidates {
+		plain, err := crypto.Decrypt(dek, entry.EncryptedValue, []byte(aad))
+		if err == nil {
+			return plain, nil
+		}
+		last = err
+	}
+	return nil, last
+}
+
+// decryptVaultECIES unwraps layer 2. The member wrap is tried first. If that
+// key does not match the ciphertext, the active Org CA private key in durable
+// storage is tried. That happens after a CA rotation when new writes use the
+// new certificate and existing member wraps still hold the previous key, or
+// the reverse.
+func (v *VaultService) decryptVaultECIES(ctx context.Context, orgID string, memberOrgCA *ecdsa.PrivateKey, eciesOutput []byte) ([]byte, error) {
+	var first error
+	if memberOrgCA != nil {
+		plain, err := crypto.ECIESDecrypt(memberOrgCA, eciesOutput, "envsync-ecies-v1", orgID, []byte(orgID))
+		if err == nil {
+			return plain, nil
+		}
+		first = err
+	}
+	plain, err := v.eciesDecryptWithDurableOrgCA(ctx, orgID, eciesOutput)
+	if err == nil {
+		return plain, nil
+	}
+	if first != nil {
+		return nil, internalError("ECIES decryption failed", first)
+	}
+	return nil, internalError("ECIES decryption failed", err)
+}
+
+func (v *VaultService) eciesDecryptWithDurableOrgCA(ctx context.Context, orgID string, eciesOutput []byte) ([]byte, error) {
+	if v.dekManager == nil {
+		return nil, fmt.Errorf("dek manager is not configured")
+	}
+	record, err := v.vaultStore.GetOrgCA(ctx, orgID, "")
+	if err != nil {
+		return nil, err
+	}
+	if record == nil || len(record.EncryptedPrivateKey) == 0 {
+		return nil, fmt.Errorf("durable org CA private key is not available")
+	}
+	aad := []byte("org-ca-key:" + orgID + ":" + record.SerialNumber)
+	keyBytes, err := v.dekManager.DecryptOrgScoped(orgID, record.EncryptedPrivateKey, aad)
+	if err != nil {
+		return nil, err
+	}
+	defer crypto.ZeroizeBytes(keyBytes)
+	orgCAKey, err := crypto.UnmarshalECPrivateKey(keyBytes)
+	if err != nil {
+		return nil, err
+	}
+	return crypto.ECIESDecrypt(orgCAKey, eciesOutput, "envsync-ecies-v1", orgID, []byte(orgID))
 }
 
 // unwrapOrgCAForManagedMember recovers the Org CA private key for a managed member.

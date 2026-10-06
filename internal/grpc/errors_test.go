@@ -66,7 +66,13 @@ func TestToStatusError_MappingTable(t *testing.T) {
 			name:        "explicit internal error",
 			err:         service.NewDomainError(service.ErrorInternal, "database query failed", secretCause),
 			wantCode:    codes.Internal,
-			wantMessage: "internal server error",
+			wantMessage: "database query failed",
+		},
+		{
+			name:        "internal error keeps a safe cause",
+			err:         service.NewDomainError(service.ErrorInternal, "KMS decryption failed", errors.New("decryption failed (AAD mismatch or tampered data)")),
+			wantCode:    codes.Internal,
+			wantMessage: "KMS decryption failed: decryption failed (AAD mismatch or tampered data)",
 		},
 		{
 			name:        "unknown error",
