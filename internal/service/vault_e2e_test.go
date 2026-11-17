@@ -88,7 +88,6 @@ func uniqueID() string {
 
 func TestVault_MultiTenantSecretLifecycle(t *testing.T) {
 	stack := setupVaultStack(t)
-	ctx := context.Background()
 	suffix := uniqueID()
 
 	type tenant struct {
@@ -122,7 +121,7 @@ func TestVault_MultiTenantSecretLifecycle(t *testing.T) {
 				encrypted[tenant.id][scope] = make(map[string]encResult)
 				for name, value := range secrets {
 					aad := fmt.Sprintf("%s:%s:%s", tenant.id, scope, name)
-					resp, err := stack.kmsSvc.Encrypt(ctx, &EncryptRequest{
+					resp, err := stack.kmsSvc.Encrypt(ctxForTenant(tenant.id), &EncryptRequest{
 						TenantID:  tenant.id,
 						ScopeID:   scope,
 						Plaintext: []byte(value),
@@ -150,7 +149,7 @@ func TestVault_MultiTenantSecretLifecycle(t *testing.T) {
 				for name, expectedValue := range secrets {
 					aad := fmt.Sprintf("%s:%s:%s", tenant.id, scope, name)
 					enc := encrypted[tenant.id][scope][name]
-					resp, err := stack.kmsSvc.Decrypt(ctx, &DecryptRequest{
+					resp, err := stack.kmsSvc.Decrypt(ctxForTenant(tenant.id), &DecryptRequest{
 						TenantID:     tenant.id,
 						ScopeID:      scope,
 						Ciphertext:   enc.ciphertext,
@@ -179,7 +178,7 @@ func TestVault_MultiTenantSecretLifecycle(t *testing.T) {
 			aad := fmt.Sprintf("%s:%s:%s", acme.id, "production", name)
 
 			// Try to decrypt acme's ciphertext using globex's tenant/scope
-			_, err := stack.kmsSvc.Decrypt(ctx, &DecryptRequest{
+			_, err := stack.kmsSvc.Decrypt(ctxForTenant(globex.id), &DecryptRequest{
 				TenantID:     globex.id,
 				ScopeID:      "production",
 				Ciphertext:   enc.ciphertext,
@@ -201,7 +200,7 @@ func TestVault_MultiTenantSecretLifecycle(t *testing.T) {
 			aad := fmt.Sprintf("%s:%s:%s", tenant.id, "production", name)
 
 			// Try to decrypt production ciphertext using staging scope (different DEK)
-			_, err := stack.kmsSvc.Decrypt(ctx, &DecryptRequest{
+			_, err := stack.kmsSvc.Decrypt(ctxForTenant(tenant.id), &DecryptRequest{
 				TenantID:     tenant.id,
 				ScopeID:      "staging",
 				Ciphertext:   enc.ciphertext,
@@ -217,10 +216,10 @@ func TestVault_MultiTenantSecretLifecycle(t *testing.T) {
 
 func TestVault_KeyRotationContinuity(t *testing.T) {
 	stack := setupVaultStack(t)
-	ctx := context.Background()
 	suffix := uniqueID()
 
 	tenantID := "rotation-org-" + suffix
+	ctx := ctxForTenant(tenantID)
 	scopeID := "app-1"
 
 	// Step 1: Store 5 secrets
@@ -351,10 +350,10 @@ func TestVault_KeyRotationContinuity(t *testing.T) {
 
 func TestVault_BatchSecretOperations(t *testing.T) {
 	stack := setupVaultStack(t)
-	ctx := context.Background()
 	suffix := uniqueID()
 
 	tenantID := "batch-org-" + suffix
+	ctx := ctxForTenant(tenantID)
 	scopeID := "batch-app"
 
 	// Step 1: Prepare 10 env vars as batch items
@@ -423,10 +422,10 @@ func TestVault_BatchSecretOperations(t *testing.T) {
 
 func TestVault_AuditTrailIntegrity(t *testing.T) {
 	stack := setupVaultStack(t)
-	ctx := context.Background()
 	suffix := uniqueID()
 
 	tenantID := "audit-org-" + suffix
+	ctx := ctxForTenant(tenantID)
 	scopeID := "audit-app"
 
 	// Step 1: Perform a sequence of operations

@@ -45,9 +45,32 @@ func main() {
 	tenantID := "org-test-001"
 	scopeID := "app-test-001"
 
-	// --- 2. CreateDataKey ---
-	fmt.Println("\n=== 2. CreateDataKey ===")
-	keyResp, err := kms.CreateDataKey(ctx, &pb.CreateDataKeyRequest{
+	fmt.Println("\n=== 2. Enroll a member and open a session ===")
+	if _, err = pkiClient.CreateOrgCA(ctx, &pb.CreateOrgCARequest{
+		OrgId:   tenantID,
+		OrgName: "Test Organization",
+	}); err != nil {
+		log.Fatalf("CreateOrgCA: %v", err)
+	}
+	memberResp, err := pkiClient.IssueMemberCert(ctx, &pb.IssueMemberCertRequest{
+		MemberId:    "user-001",
+		MemberEmail: "alice@example.com",
+		OrgId:       tenantID,
+		Role:        "admin",
+	})
+	if err != nil {
+		log.Fatalf("IssueMemberCert: %v", err)
+	}
+	token, err := sessionproof.Mint(ctx, sessions, memberResp.CertPem, memberResp.KeyPem, memberResp.SerialHex, []string{"vault:read", "vault:write"})
+	if err != nil {
+		log.Fatalf("Mint session: %v", err)
+	}
+	authCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+	fmt.Printf("  Member cert serial: %s\n", memberResp.SerialHex)
+
+	// --- 3. CreateDataKey ---
+	fmt.Println("\n=== 3. CreateDataKey ===")
+	keyResp, err := kms.CreateDataKey(authCtx, &pb.CreateDataKeyRequest{
 		TenantId: tenantID,
 		ScopeId:  scopeID,
 	})
@@ -76,7 +99,7 @@ func main() {
 	encryptedMap := make(map[string]encryptedSecret)
 
 	for _, s := range secrets {
-		encResp, err := kms.Encrypt(ctx, &pb.EncryptRequest{
+		encResp, err := kms.Encrypt(authCtx, &pb.EncryptRequest{
 			TenantId:  tenantID,
 			ScopeId:   scopeID,
 			Plaintext: []byte(s.plaintext),
@@ -97,7 +120,7 @@ func main() {
 	fmt.Println("\n=== 4. Decrypt via miniKMS (roundtrip verification) ===")
 	for _, s := range secrets {
 		enc := encryptedMap[s.name]
-		decResp, err := kms.Decrypt(ctx, &pb.DecryptRequest{
+		decResp, err := kms.Decrypt(authCtx, &pb.DecryptRequest{
 			TenantId:     tenantID,
 			ScopeId:      scopeID,
 			Ciphertext:   enc.ciphertext,
@@ -116,7 +139,7 @@ func main() {
 
 	// --- 5. Key Rotation ---
 	fmt.Println("\n=== 5. RotateDataKey ===")
-	rotResp, err := kms.RotateDataKey(ctx, &pb.RotateDataKeyRequest{
+	rotResp, err := kms.RotateDataKey(authCtx, &pb.RotateDataKeyRequest{
 		TenantId: tenantID,
 		ScopeId:  scopeID,
 	})
@@ -128,7 +151,7 @@ func main() {
 	// Encrypt + decrypt with rotated key
 	newPlaintext := "post-rotation-secret-value"
 	newAAD := "env:production"
-	encNew, err := kms.Encrypt(ctx, &pb.EncryptRequest{
+	encNew, err := kms.Encrypt(authCtx, &pb.EncryptRequest{
 		TenantId:  tenantID,
 		ScopeId:   scopeID,
 		Plaintext: []byte(newPlaintext),
@@ -139,7 +162,7 @@ func main() {
 	}
 	fmt.Printf("  Encrypted with rotated key: %s\n", encNew.KeyVersionId)
 
-	decRotated, err := kms.Decrypt(ctx, &pb.DecryptRequest{
+	decRotated, err := kms.Decrypt(authCtx, &pb.DecryptRequest{
 		TenantId:     tenantID,
 		ScopeId:      scopeID,
 		Ciphertext:   encNew.Ciphertext,
@@ -155,29 +178,9 @@ func main() {
 	}
 	fmt.Printf("  Rotated secret roundtrip OK\n")
 
-	// --- 6. PKI: CreateOrgCA + IssueMemberCert ---
+	// --- 6. PKI: root CA ---
 	fmt.Println("\n=== 6. PKI ===")
-	caResp, err := pkiClient.CreateOrgCA(ctx, &pb.CreateOrgCARequest{
-		OrgId:   tenantID,
-		OrgName: "Test Organization",
-	})
-	if err != nil {
-		log.Fatalf("CreateOrgCA: %v", err)
-	}
-	fmt.Printf("  Org CA serial: %s\n", caResp.SerialHex)
-
-	memberResp, err := pkiClient.IssueMemberCert(ctx, &pb.IssueMemberCertRequest{
-		MemberId:    "user-001",
-		MemberEmail: "alice@example.com",
-		OrgId:       tenantID,
-		Role:        "admin",
-	})
-	if err != nil {
-		log.Fatalf("IssueMemberCert: %v", err)
-	}
-	fmt.Printf("  Member cert serial: %s\n", memberResp.SerialHex)
-
-	rootCAResp, err := pkiClient.GetRootCA(ctx, &pb.GetRootCARequest{})
+	rootCAResp, err := pkiClient.GetRootCA(authCtx, &pb.GetRootCARequest{})
 	if err != nil {
 		log.Fatalf("GetRootCA: %v", err)
 	}
@@ -185,7 +188,7 @@ func main() {
 
 	// --- 7. Audit: GetAuditLogs + VerifyChain ---
 	fmt.Println("\n=== 7. Audit ===")
-	logsResp, err := auditClient.GetAuditLogs(ctx, &pb.GetAuditLogsRequest{
+	logsResp, err := auditClient.GetAuditLogs(authCtx, &pb.GetAuditLogsRequest{
 		OrgId:  tenantID,
 		Limit:  10,
 		Offset: 0,
@@ -198,7 +201,7 @@ func main() {
 		fmt.Printf("    [%s] %s by %s\n", e.Timestamp, e.Action, e.ActorId)
 	}
 
-	verifyResp, err := auditClient.VerifyChain(ctx, &pb.VerifyChainRequest{
+	verifyResp, err := auditClient.VerifyChain(authCtx, &pb.VerifyChainRequest{
 		OrgId: tenantID,
 	})
 	if err != nil {
@@ -207,19 +210,19 @@ func main() {
 	fmt.Printf("  Chain valid: %v\n", verifyResp.Valid)
 
 	fmt.Println("\n=== 8. Tenant isolation and AAD ===")
-	encA, err := kms.Encrypt(ctx, &pb.EncryptRequest{
+	encA, err := kms.Encrypt(authCtx, &pb.EncryptRequest{
 		TenantId: tenantID, ScopeId: scopeID, Plaintext: []byte("org-a-secret"), Aad: "env:prod",
 	})
 	if err != nil {
 		log.Fatalf("Encrypt org A: %v", err)
 	}
-	if _, err := kms.Decrypt(ctx, &pb.DecryptRequest{
+	if _, err := kms.Decrypt(authCtx, &pb.DecryptRequest{
 		TenantId: "org-other", ScopeId: scopeID, Ciphertext: encA.Ciphertext, Aad: "env:prod", KeyVersionId: encA.KeyVersionId,
 	}); err == nil {
 		log.Fatal("org-other decrypted org-test-001 ciphertext")
 	}
 	fmt.Println("  cross-tenant decrypt rejected")
-	if _, err := kms.Decrypt(ctx, &pb.DecryptRequest{
+	if _, err := kms.Decrypt(authCtx, &pb.DecryptRequest{
 		TenantId: tenantID, ScopeId: scopeID, Ciphertext: encA.Ciphertext, Aad: "env:staging", KeyVersionId: encA.KeyVersionId,
 	}); err == nil {
 		log.Fatal("wrong AAD decrypt succeeded")
@@ -227,14 +230,14 @@ func main() {
 	fmt.Println("  wrong AAD decrypt rejected")
 
 	fmt.Println("\n=== 9. Env CA + leaf ===")
-	envCA, err := pkiClient.CreateEnvCA(ctx, &pb.CreateEnvCARequest{
+	envCA, err := pkiClient.CreateEnvCA(authCtx, &pb.CreateEnvCARequest{
 		OrgId: tenantID, EnvId: "env-prod", Name: "production",
 	})
 	if err != nil {
 		log.Fatalf("CreateEnvCA: %v", err)
 	}
 	fmt.Printf("  Env CA serial: %s\n", envCA.SerialHex)
-	leaf, err := pkiClient.IssueLeafCert(ctx, &pb.IssueLeafCertRequest{
+	leaf, err := pkiClient.IssueLeafCert(authCtx, &pb.IssueLeafCertRequest{
 		OrgId: tenantID, CommonName: "svc.test.local", DnsSans: []string{"svc.test.local"}, TtlDays: 30, KeyAlgorithm: "ECDSA_P256",
 	})
 	if err != nil {
@@ -250,11 +253,6 @@ func main() {
 	fmt.Printf("  Leaf serial: %s\n", leaf.SerialHex)
 
 	fmt.Println("\n=== 10. Session proof + vault ===")
-	token, err := sessionproof.Mint(ctx, sessions, memberResp.CertPem, memberResp.KeyPem, memberResp.SerialHex, []string{"vault:read", "vault:write"})
-	if err != nil {
-		log.Fatalf("Mint session: %v", err)
-	}
-	authCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 	if _, err := vault.Write(authCtx, &pb.VaultWriteRequest{
 		OrgId: tenantID, ScopeId: scopeID, EntryType: "secret", Key: "SESSION_OK", Value: []byte("ok"), CreatedBy: "user-001",
 	}); err != nil {

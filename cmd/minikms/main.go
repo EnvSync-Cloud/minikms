@@ -26,6 +26,7 @@ import (
 	"github.com/envsync-cloud/minikms/internal/crypto"
 	"github.com/envsync-cloud/minikms/internal/escrow"
 	grpcadapter "github.com/envsync-cloud/minikms/internal/grpc"
+	"github.com/envsync-cloud/minikms/internal/intercept"
 	"github.com/envsync-cloud/minikms/internal/keys"
 	"github.com/envsync-cloud/minikms/internal/pki"
 	"github.com/envsync-cloud/minikms/internal/ratelimit"
@@ -64,6 +65,9 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+	if !cfg.TLSEnabled && !cfg.MayServePlaintext() {
+		log.Fatalf("Refusing to start without TLS: set MINIKMS_TLS_ENABLED=true or MINIKMS_ALLOW_INSECURE=true for local development only")
 	}
 
 	// Load root key — this is the ONLY place the root key is loaded (Issue #1)
@@ -133,8 +137,8 @@ func main() {
 		log.Printf("Root escrow ready (set: %s, newly created: %t)", rootSet.ID, created)
 	}
 
-	// Initialize rate limiter
-	_ = ratelimit.NewRateLimiter(redisStore.Client(), cfg.RateLimitPerSecond, cfg.RateLimitBurst)
+	// Initialize rate limiter. The gRPC interceptor chain calls Allow.
+	limiter := ratelimit.NewRateLimiter(redisStore.Client(), cfg.RateLimitPerSecond, cfg.RateLimitBurst)
 
 	// Load the shared PKI root CA. Generating it in-process would give every
 	// replica a different trust root and invalidate rolling deployments.
@@ -195,7 +199,7 @@ func main() {
 	vaultAdapter := grpcadapter.NewVaultAdapter(vaultSvc)
 	sessionAdapter := grpcadapter.NewSessionAdapter(sessionSvc)
 
-	// Create gRPC server
+	// Create gRPC server. Plaintext listens only with an explicit opt-in.
 	var opts []grpc.ServerOption
 	if cfg.TLSEnabled {
 		creds, err := loadMTLSServerCreds(cfg)
@@ -203,7 +207,12 @@ func main() {
 			log.Fatalf("Failed to load TLS credentials: %v", err)
 		}
 		opts = append(opts, grpc.Creds(creds))
+	} else if !cfg.MayServePlaintext() {
+		log.Fatalf("Refusing to start without TLS: set MINIKMS_TLS_ENABLED=true or MINIKMS_ALLOW_INSECURE=true for local development only")
+	} else {
+		log.Printf("WARNING: serving without TLS because MINIKMS_ALLOW_INSECURE=true (local development only)")
 	}
+	opts = append(opts, intercept.ServerOptions(auth.NewJWTValidator(pgStore), limiter)...)
 
 	grpcServer := grpc.NewServer(opts...)
 
@@ -219,8 +228,9 @@ func main() {
 	healthpb.RegisterHealthServer(grpcServer, healthServer)
 	healthServer.SetServingStatus("minikms", healthpb.HealthCheckResponse_SERVING)
 
-	// Enable server reflection for debugging
-	reflection.Register(grpcServer)
+	if cfg.ReflectionEnabled {
+		reflection.Register(grpcServer)
+	}
 
 	// Start listening
 	listener, err := net.Listen("tcp", cfg.GRPCAddr)

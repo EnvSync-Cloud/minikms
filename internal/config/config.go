@@ -19,10 +19,14 @@ type Config struct {
 	SessionSigningKey     string `envconfig:"MINIKMS_SESSION_SIGNING_KEY"`
 	SessionSigningKeyFile string `envconfig:"MINIKMS_SESSION_SIGNING_KEY_FILE"`
 
-	TLSEnabled bool   `envconfig:"MINIKMS_TLS_ENABLED" default:"false"`
-	TLSCert    string `envconfig:"MINIKMS_TLS_CERT"`
-	TLSKey     string `envconfig:"MINIKMS_TLS_KEY"`
-	TLSCAFile  string `envconfig:"MINIKMS_TLS_CA_FILE"`
+	TLSEnabled bool `envconfig:"MINIKMS_TLS_ENABLED" default:"false"`
+	// AllowInsecure permits a plaintext listener for local development only.
+	AllowInsecure bool `envconfig:"MINIKMS_ALLOW_INSECURE" default:"false"`
+	// ReflectionEnabled registers gRPC server reflection when explicitly set.
+	ReflectionEnabled bool   `envconfig:"MINIKMS_REFLECTION_ENABLED" default:"false"`
+	TLSCert           string `envconfig:"MINIKMS_TLS_CERT"`
+	TLSKey            string `envconfig:"MINIKMS_TLS_KEY"`
+	TLSCAFile         string `envconfig:"MINIKMS_TLS_CA_FILE"`
 
 	// Rate limiting
 	RateLimitPerSecond int `envconfig:"MINIKMS_RATE_LIMIT_PER_SECOND" default:"100"`
@@ -53,4 +57,11 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// MayServePlaintext reports whether the process may listen without TLS.
+// Plaintext is allowed only when AllowInsecure is set and TLS is disabled.
+// Startup without TLS and without AllowInsecure fails this check.
+func (c Config) MayServePlaintext() bool {
+	return !c.TLSEnabled && c.AllowInsecure
 }

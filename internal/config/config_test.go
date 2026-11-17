@@ -30,6 +30,15 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.TLSEnabled {
 		t.Errorf("TLSEnabled = true, want false")
 	}
+	if cfg.AllowInsecure {
+		t.Error("AllowInsecure = true, want false")
+	}
+	if cfg.ReflectionEnabled {
+		t.Error("ReflectionEnabled = true, want false")
+	}
+	if cfg.MayServePlaintext() {
+		t.Fatal("startup without TLS and without AllowInsecure must not serve plaintext")
+	}
 	if cfg.RateLimitPerSecond != 100 {
 		t.Errorf("RateLimitPerSecond = %d, want 100", cfg.RateLimitPerSecond)
 	}
@@ -64,8 +73,11 @@ func TestLoad_CustomValues(t *testing.T) {
 	t.Setenv("MINIKMS_SESSION_SIGNING_KEY_FILE", "/run/secrets/session-key.pem")
 	t.Setenv("MINIKMS_GRPC_ADDR", "127.0.0.1:9090")
 	t.Setenv("MINIKMS_TLS_ENABLED", "true")
+	t.Setenv("MINIKMS_ALLOW_INSECURE", "true")
+	t.Setenv("MINIKMS_REFLECTION_ENABLED", "true")
 	t.Setenv("MINIKMS_TLS_CERT", "/path/to/cert.pem")
 	t.Setenv("MINIKMS_TLS_KEY", "/path/to/key.pem")
+	t.Setenv("MINIKMS_TLS_CA_FILE", "/path/to/ca.pem")
 	t.Setenv("MINIKMS_RATE_LIMIT_PER_SECOND", "50")
 	t.Setenv("MINIKMS_RATE_LIMIT_BURST", "100")
 	t.Setenv("MINIKMS_MAX_ENCRYPTIONS_PER_KEY", "500000")
@@ -87,11 +99,23 @@ func TestLoad_CustomValues(t *testing.T) {
 	if !cfg.TLSEnabled {
 		t.Errorf("TLSEnabled = false, want true")
 	}
+	if !cfg.AllowInsecure {
+		t.Error("AllowInsecure = false, want true")
+	}
+	if !cfg.ReflectionEnabled {
+		t.Error("ReflectionEnabled = false, want true")
+	}
+	if cfg.MayServePlaintext() {
+		t.Error("TLS-enabled config must not report plaintext serving")
+	}
 	if cfg.TLSCert != "/path/to/cert.pem" {
 		t.Errorf("TLSCert = %q, want %q", cfg.TLSCert, "/path/to/cert.pem")
 	}
 	if cfg.TLSKey != "/path/to/key.pem" {
 		t.Errorf("TLSKey = %q, want %q", cfg.TLSKey, "/path/to/key.pem")
+	}
+	if cfg.TLSCAFile != "/path/to/ca.pem" {
+		t.Errorf("TLSCAFile = %q, want %q", cfg.TLSCAFile, "/path/to/ca.pem")
 	}
 	if cfg.RateLimitPerSecond != 50 {
 		t.Errorf("RateLimitPerSecond = %d, want 50", cfg.RateLimitPerSecond)
@@ -134,5 +158,50 @@ func TestLoad_MissingRequired(t *testing.T) {
 	_, err := Load()
 	if err == nil {
 		t.Fatal("Load() should error when required vars are missing")
+	}
+}
+
+func TestMayServePlaintext(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+		want bool
+	}{
+		{name: "startup without TLS and without AllowInsecure", cfg: Config{}, want: false},
+		{name: "tls enabled", cfg: Config{TLSEnabled: true}, want: false},
+		{name: "explicit insecure opt-in", cfg: Config{AllowInsecure: true}, want: true},
+		{name: "tls and insecure opt-in is not plaintext", cfg: Config{TLSEnabled: true, AllowInsecure: true}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.MayServePlaintext(); got != tt.want {
+				t.Fatalf("MayServePlaintext() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_AllowInsecurePermitsPlaintext(t *testing.T) {
+	t.Setenv("MINIKMS_DB_URL", "postgres://localhost/test")
+	t.Setenv("MINIKMS_REDIS_URL", "redis://localhost:6379/0")
+	t.Setenv("MINIKMS_TLS_ENABLED", "false")
+	t.Setenv("MINIKMS_ALLOW_INSECURE", "true")
+	t.Setenv("MINIKMS_REFLECTION_ENABLED", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.TLSEnabled {
+		t.Fatal("TLSEnabled = true, want false")
+	}
+	if !cfg.AllowInsecure {
+		t.Fatal("AllowInsecure = false, want true")
+	}
+	if cfg.ReflectionEnabled {
+		t.Fatal("ReflectionEnabled = true, want false")
+	}
+	if !cfg.MayServePlaintext() {
+		t.Fatal("explicit MINIKMS_ALLOW_INSECURE must permit plaintext when TLS is disabled")
 	}
 }

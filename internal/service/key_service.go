@@ -42,13 +42,17 @@ func (s *KeyService) CreateDataKey(ctx context.Context, req *CreateDataKeyReques
 	if err := validateKeyRequest(req); err != nil {
 		return nil, err
 	}
+	principal, err := authenticatedTenant(ctx, req.TenantID)
+	if err != nil {
+		return nil, err
+	}
 
-	_, keyVersionID, err := s.dekManager.GetOrCreateDEK(ctx, req.TenantID, req.ScopeID)
+	_, keyVersionID, err := s.dekManager.GetOrCreateDEK(ctx, principal.TenantID, req.ScopeID)
 	if err != nil {
 		return nil, internalError("failed to create data key", err)
 	}
 
-	_ = s.auditLogger.Log(ctx, req.TenantID, "data_key_created", "system",
+	_ = s.auditLogger.Log(ctx, principal.TenantID, "data_key_created", principal.ActorID,
 		fmt.Sprintf("Data key created for scope %s", req.ScopeID), "")
 
 	return &CreateDataKeyResponse{
@@ -78,13 +82,17 @@ func (s *KeyService) RotateDataKey(ctx context.Context, req *RotateDataKeyReques
 	); err != nil {
 		return nil, err
 	}
+	principal, err := authenticatedTenant(ctx, req.TenantID)
+	if err != nil {
+		return nil, err
+	}
 
-	newID, err := s.dekManager.RotateDEK(ctx, req.TenantID, req.ScopeID)
+	newID, err := s.dekManager.RotateDEK(ctx, principal.TenantID, req.ScopeID)
 	if err != nil {
 		return nil, internalError("failed to rotate data key", err)
 	}
 
-	_ = s.auditLogger.Log(ctx, req.TenantID, "data_key_rotated", "system",
+	_ = s.auditLogger.Log(ctx, principal.TenantID, "data_key_rotated", principal.ActorID,
 		fmt.Sprintf("Data key rotated for scope %s, new version: %s", req.ScopeID, newID), "")
 
 	return &RotateDataKeyResponse{NewKeyVersionID: newID}, nil

@@ -53,8 +53,12 @@ func (s *KMSService) Encrypt(ctx context.Context, req *EncryptRequest) (*Encrypt
 	); err != nil {
 		return nil, err
 	}
+	principal, err := authenticatedTenant(ctx, req.TenantID)
+	if err != nil {
+		return nil, err
+	}
 
-	dek, keyVersionID, err := s.dekManager.GetOrCreateDEK(ctx, req.TenantID, req.ScopeID)
+	dek, keyVersionID, err := s.dekManager.GetOrCreateDEK(ctx, principal.TenantID, req.ScopeID)
 	if err != nil {
 		return nil, internalError("failed to get DEK", err)
 	}
@@ -71,12 +75,16 @@ func (s *KMSService) Encrypt(ctx context.Context, req *EncryptRequest) (*Encrypt
 		return nil, internalError("failed to track encryption", err)
 	}
 
-	// Auto-rotate if needed
+	// Auto-rotate if needed. Audit after the RPC returns, so detach from ctx.
 	if status == crypto.KeyStatusRotatePending {
+		tenantID := principal.TenantID
+		actorID := principal.ActorID
+		scopeID := req.ScopeID
+		versionID := keyVersionID
 		go func() {
-			_ = s.auditLogger.Log(context.Background(), req.TenantID,
-				"key_rotation_pending", "system",
-				fmt.Sprintf("Key %s approaching max encryptions for scope %s", keyVersionID, req.ScopeID), "")
+			_ = s.auditLogger.Log(context.Background(), tenantID,
+				"key_rotation_pending", actorID,
+				fmt.Sprintf("Key %s approaching max encryptions for scope %s", versionID, scopeID), "")
 		}()
 	}
 
@@ -113,13 +121,17 @@ func (s *KMSService) Decrypt(ctx context.Context, req *DecryptRequest) (*Decrypt
 	); err != nil {
 		return nil, err
 	}
+	principal, err := authenticatedTenant(ctx, req.TenantID)
+	if err != nil {
+		return nil, err
+	}
 
 	ciphertext, err := base64.StdEncoding.DecodeString(req.Ciphertext)
 	if err != nil {
 		return nil, NewDomainError(ErrorInvalidArgument, "ciphertext must be valid base64", err)
 	}
 
-	dek, err := s.dekManager.GetDEKByVersion(ctx, req.TenantID, req.ScopeID, req.KeyVersionID)
+	dek, err := s.dekManager.GetDEKByVersion(ctx, principal.TenantID, req.ScopeID, req.KeyVersionID)
 	if err != nil {
 		return nil, classifyKeyVersionError(err)
 	}
@@ -130,7 +142,7 @@ func (s *KMSService) Decrypt(ctx context.Context, req *DecryptRequest) (*Decrypt
 		return nil, NewDomainError(ErrorInvalidArgument, "ciphertext could not be decrypted", err)
 	}
 
-	_ = s.auditLogger.Log(ctx, req.TenantID, "decrypt", "system",
+	_ = s.auditLogger.Log(ctx, principal.TenantID, "decrypt", principal.ActorID,
 		fmt.Sprintf("Decrypted data for scope %s with key version %s", req.ScopeID, req.KeyVersionID), "")
 
 	return &DecryptResponse{Plaintext: plaintext}, nil
@@ -168,8 +180,12 @@ func (s *KMSService) BatchEncrypt(ctx context.Context, req *BatchEncryptRequest)
 	if len(req.Items) == 0 {
 		return nil, invalidArgument("items must not be empty")
 	}
+	principal, err := authenticatedTenant(ctx, req.TenantID)
+	if err != nil {
+		return nil, err
+	}
 
-	dek, keyVersionID, err := s.dekManager.GetOrCreateDEK(ctx, req.TenantID, req.ScopeID)
+	dek, keyVersionID, err := s.dekManager.GetOrCreateDEK(ctx, principal.TenantID, req.ScopeID)
 	if err != nil {
 		return nil, internalError("failed to get DEK", err)
 	}
@@ -216,6 +232,10 @@ func (s *KMSService) BatchDecrypt(ctx context.Context, req *BatchDecryptRequest)
 	if len(req.Items) == 0 {
 		return nil, invalidArgument("items must not be empty")
 	}
+	principal, err := authenticatedTenant(ctx, req.TenantID)
+	if err != nil {
+		return nil, err
+	}
 	for i, item := range req.Items {
 		if item.Ciphertext == "" {
 			return nil, invalidArgument(fmt.Sprintf("items[%d].ciphertext is required", i))
@@ -237,7 +257,7 @@ func (s *KMSService) BatchDecrypt(ctx context.Context, req *BatchDecryptRequest)
 		dek, ok := deks[item.KeyVersionID]
 		if !ok {
 			var err error
-			dek, err = s.dekManager.GetDEKByVersion(ctx, req.TenantID, req.ScopeID, item.KeyVersionID)
+			dek, err = s.dekManager.GetDEKByVersion(ctx, principal.TenantID, req.ScopeID, item.KeyVersionID)
 			if err != nil {
 				return nil, classifyKeyVersionError(err)
 			}
@@ -262,7 +282,7 @@ func (s *KMSService) BatchDecrypt(ctx context.Context, req *BatchDecryptRequest)
 		keyVersionIDs = append(keyVersionIDs, keyVersionID)
 	}
 	sort.Strings(keyVersionIDs)
-	_ = s.auditLogger.Log(ctx, req.TenantID, "batch_decrypt", "system",
+	_ = s.auditLogger.Log(ctx, principal.TenantID, "batch_decrypt", principal.ActorID,
 		fmt.Sprintf("Decrypted %d items for scope %s with key versions %s",
 			len(req.Items), req.ScopeID, strings.Join(keyVersionIDs, ",")), "")
 

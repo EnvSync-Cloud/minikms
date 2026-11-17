@@ -5,6 +5,7 @@ metadata:
   labels:
     app.kubernetes.io/name: minikms
 spec:
+  type: ClusterIP
   selector:
     app.kubernetes.io/name: minikms
   ports:
@@ -81,22 +82,32 @@ spec:
               value: /var/run/secrets/minikms/root-ca.key
             - name: MINIKMS_SESSION_SIGNING_KEY_FILE
               value: /var/run/secrets/minikms/session-signing-key.pem
+            - name: MINIKMS_TLS_ENABLED
+              value: "true"
+            - name: MINIKMS_ALLOW_INSECURE
+              value: "false"
+            - name: MINIKMS_REFLECTION_ENABLED
+              value: "false"
+            - name: MINIKMS_TLS_CERT
+              value: /var/run/secrets/minikms/grpc-server-cert.pem
+            - name: MINIKMS_TLS_KEY
+              value: /var/run/secrets/minikms/grpc-server-key.pem
+            - name: MINIKMS_TLS_CA_FILE
+              value: /var/run/secrets/minikms/grpc-ca.crt
           volumeMounts:
             - name: runtime-secrets
               mountPath: /var/run/secrets/minikms
               readOnly: true
           readinessProbe:
-            grpc:
+            tcpSocket:
               port: 50051
-              service: minikms
             initialDelaySeconds: 2
             periodSeconds: 5
             timeoutSeconds: 2
             failureThreshold: 3
           livenessProbe:
-            grpc:
+            tcpSocket:
               port: 50051
-              service: minikms
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 2
@@ -121,3 +132,52 @@ spec:
           secret:
             secretName: minikms-runtime-secrets
             defaultMode: 0440
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: minikms
+  labels:
+    app.kubernetes.io/name: minikms
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: minikms
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: envsync-api
+      ports:
+        - protocol: TCP
+          port: 50051
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: 6379

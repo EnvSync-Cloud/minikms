@@ -14,6 +14,7 @@ import (
 
 	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
 	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/authn"
 	"github.com/envsync-cloud/minikms/internal/keys"
 	"github.com/envsync-cloud/minikms/internal/service"
 	"github.com/envsync-cloud/minikms/internal/store"
@@ -143,9 +144,16 @@ func setupKMSAdapter(t *testing.T) *KMSAdapter {
 	return NewKMSAdapter(kmsSvc, keySvc)
 }
 
+func kmsPrincipalCtx(tenantID string) context.Context {
+	return authn.WithPrincipal(context.Background(), authn.Principal{
+		TenantID: tenantID,
+		ActorID:  "session-" + tenantID,
+	})
+}
+
 func TestKMSAdapter_EncryptDecrypt(t *testing.T) {
 	adapter := setupKMSAdapter(t)
-	ctx := context.Background()
+	ctx := kmsPrincipalCtx("org-1")
 
 	// Encrypt
 	encResp, err := adapter.Encrypt(ctx, &pb.EncryptRequest{
@@ -182,22 +190,40 @@ func TestKMSAdapter_EncryptDecrypt(t *testing.T) {
 
 func TestKMSAdapter_ErrorCodes(t *testing.T) {
 	adapter := setupKMSAdapter(t)
-	ctx := context.Background()
 
 	tests := []struct {
 		name     string
+		ctx      context.Context
 		request  *pb.DecryptRequest
 		wantCode codes.Code
 	}{
 		{
 			name: "validation",
+			ctx:  context.Background(),
 			request: &pb.DecryptRequest{
 				ScopeId: "app-1", Ciphertext: "not-base64", KeyVersionId: "key-1",
 			},
 			wantCode: codes.InvalidArgument,
 		},
 		{
+			name: "missing principal",
+			ctx:  context.Background(),
+			request: &pb.DecryptRequest{
+				TenantId: "org-1", ScopeId: "app-1", Ciphertext: "AA==", KeyVersionId: "key-1",
+			},
+			wantCode: codes.Unauthenticated,
+		},
+		{
+			name: "tenant mismatch",
+			ctx:  kmsPrincipalCtx("org-a"),
+			request: &pb.DecryptRequest{
+				TenantId: "org-b", ScopeId: "app-1", Ciphertext: "AA==", KeyVersionId: "key-1",
+			},
+			wantCode: codes.PermissionDenied,
+		},
+		{
 			name: "missing key version resource",
+			ctx:  kmsPrincipalCtx("org-1"),
 			request: &pb.DecryptRequest{
 				TenantId: "org-1", ScopeId: "app-1", Ciphertext: "AA==", KeyVersionId: "missing",
 			},
@@ -207,7 +233,7 @@ func TestKMSAdapter_ErrorCodes(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := adapter.Decrypt(ctx, test.request)
+			_, err := adapter.Decrypt(test.ctx, test.request)
 			if status.Code(err) != test.wantCode {
 				t.Fatalf("code = %v, want %v (error: %v)", status.Code(err), test.wantCode, err)
 			}
@@ -217,7 +243,7 @@ func TestKMSAdapter_ErrorCodes(t *testing.T) {
 
 func TestKMSAdapter_BatchEncryptDecrypt(t *testing.T) {
 	adapter := setupKMSAdapter(t)
-	ctx := context.Background()
+	ctx := kmsPrincipalCtx("org-1")
 
 	// Batch encrypt
 	batchEncResp, err := adapter.BatchEncrypt(ctx, &pb.BatchEncryptRequest{
@@ -260,7 +286,7 @@ func TestKMSAdapter_BatchEncryptDecrypt(t *testing.T) {
 
 func TestKMSAdapter_CreateDataKey(t *testing.T) {
 	adapter := setupKMSAdapter(t)
-	ctx := context.Background()
+	ctx := kmsPrincipalCtx("org-dk")
 
 	resp, err := adapter.CreateDataKey(ctx, &pb.CreateDataKeyRequest{
 		TenantId: "org-dk",
