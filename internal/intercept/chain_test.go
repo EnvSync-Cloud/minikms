@@ -100,6 +100,8 @@ func TestPreAuthMethodsNotRejectedByAuth(t *testing.T) {
 		healthpb.Health_Check_FullMethodName,
 		pb.SessionService_IssueSessionChallenge_FullMethodName,
 		pb.SessionService_CreateSession_FullMethodName,
+		pb.PKIService_CreateOrgCA_FullMethodName,
+		pb.PKIService_IssueMemberCert_FullMethodName,
 	} {
 		called := false
 		_, err := c.authUnary(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: method}, func(ctx context.Context, _ any) (any, error) {
@@ -146,8 +148,8 @@ func TestProtectedMethodsRequireSession(t *testing.T) {
 			_, err := pb.NewKMSServiceClient(conn).Decrypt(ctx, &pb.DecryptRequest{})
 			return err
 		}},
-		{"CreateOrgCA", func() error {
-			_, err := pb.NewPKIServiceClient(conn).CreateOrgCA(ctx, &pb.CreateOrgCARequest{})
+		{"CreateEnvCA", func() error {
+			_, err := pb.NewPKIServiceClient(conn).CreateEnvCA(ctx, &pb.CreateEnvCARequest{})
 			return err
 		}},
 		{"GetAuditLogs", func() error {
