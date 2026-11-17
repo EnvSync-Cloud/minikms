@@ -403,6 +403,26 @@ func generateTestRootCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	return cert, key, nil
 }
 
+func TestPKIAdapter_CreateOrgCACSR_ShortOrgID(t *testing.T) {
+	adapter := setupPKIAdapter(t)
+	ctx := context.Background()
+
+	for _, orgID := range []string{"a", "1234567"} {
+		t.Run(orgID, func(t *testing.T) {
+			resp, err := adapter.CreateOrgCACSR(ctx, &pb.CreateOrgCACSRRequest{
+				OrgId:   orgID,
+				OrgName: "Short Org",
+			})
+			if resp != nil {
+				t.Fatalf("response = %+v, want nil", resp)
+			}
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("CreateOrgCACSR(%q) code = %v, want InvalidArgument (err=%v)", orgID, status.Code(err), err)
+			}
+		})
+	}
+}
+
 func TestPKIAdapter_CreateOrgCA(t *testing.T) {
 	adapter := setupPKIAdapter(t)
 	ctx := context.Background()

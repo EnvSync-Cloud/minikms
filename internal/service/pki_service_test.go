@@ -826,3 +826,54 @@ func TestCreateOrgCAFull_SharedAcrossReplicas(t *testing.T) {
 		t.Fatal("replica did not load the shared Org CA certificate and key")
 	}
 }
+
+func TestCreateOrgCACSR_ShortOrgIDDoesNotPanic(t *testing.T) {
+	svc, _, _, store := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	for _, orgID := range []string{"a", "1234567"} {
+		t.Run(orgID, func(t *testing.T) {
+			csr, err := svc.CreateOrgCACSR(ctx, orgID, "Short Org")
+			if csr != "" {
+				t.Fatalf("CreateOrgCACSR(%q) csr = %q, want empty", orgID, csr)
+			}
+			assertErrorKind(t, err, ErrorInvalidArgument)
+			pending, pendErr := store.GetPendingOrgCA(ctx, orgID)
+			if pendErr != nil {
+				t.Fatalf("GetPendingOrgCA: %v", pendErr)
+			}
+			if pending != nil {
+				t.Fatalf("short org id %q stored a pending CA", orgID)
+			}
+		})
+	}
+
+	// Eight characters is the first length that can be sliced.
+	const orgID = "orgid123"
+	csr, err := svc.CreateOrgCACSR(ctx, orgID, "Eight Org")
+	if err != nil {
+		t.Fatalf("CreateOrgCACSR(%q): %v", orgID, err)
+	}
+	if block, _ := pem.Decode([]byte(csr)); block == nil {
+		t.Fatal("expected a CSR PEM for an 8-character org id")
+	}
+	pending, err := store.GetPendingOrgCA(ctx, orgID)
+	if err != nil {
+		t.Fatalf("GetPendingOrgCA: %v", err)
+	}
+	if pending == nil || pending.SerialNumber != "pending-"+orgID {
+		t.Fatalf("serial = %+v, want pending-%s", pending, orgID)
+	}
+
+	longID := orgID + "xyz"
+	if _, err := svc.CreateOrgCACSR(ctx, longID, "Long Org"); err != nil {
+		t.Fatalf("CreateOrgCACSR(%q): %v", longID, err)
+	}
+	pending, err = store.GetPendingOrgCA(ctx, longID)
+	if err != nil {
+		t.Fatalf("GetPendingOrgCA: %v", err)
+	}
+	if pending == nil || pending.SerialNumber != "pending-"+orgID {
+		t.Fatalf("serial = %+v, want pending-%s", pending, orgID)
+	}
+}

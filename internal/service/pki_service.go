@@ -292,9 +292,21 @@ func (s *PKIService) CreateOrgCA(ctx context.Context, req *CreateOrgCARequest) (
 	return resp, err
 }
 
+func pendingOrgCASerial(orgID string) (string, error) {
+	const prefixLen = 8
+	if len(orgID) < prefixLen {
+		return "", invalidArgument("org_id must be at least 8 characters")
+	}
+	return "pending-" + orgID[:prefixLen], nil
+}
+
 func (s *PKIService) CreateOrgCACSR(ctx context.Context, orgID, orgName string) (string, error) {
 	if orgID == "" || orgName == "" {
 		return "", invalidArgument("org_id and org_name are required")
+	}
+	pendingSerial, err := pendingOrgCASerial(orgID)
+	if err != nil {
+		return "", err
 	}
 	if s.store == nil || s.orgKeyMgr == nil {
 		return "", NewDomainError(ErrorFailedPrecondition, "durable organization CA storage is not initialized", nil)
@@ -312,10 +324,6 @@ func (s *PKIService) CreateOrgCACSR(ctx context.Context, orgID, orgName string) 
 	key, csrPEM, err := pki.CreateOrgCACSR(orgID, orgName)
 	if err != nil {
 		return "", internalError("failed to create organization CA CSR", err)
-	}
-	pendingSerial := fmt.Sprintf("pending-%s", orgID[:8])
-	if len(orgID) < 8 {
-		pendingSerial = "pending-" + orgID
 	}
 	encryptedKey, err := s.encryptOrgCAKey(orgID, pendingSerial, key)
 	if err != nil {
