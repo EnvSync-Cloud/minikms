@@ -385,12 +385,14 @@ func (s *PostgresStore) StoreCertificate(ctx context.Context, rec *pkistore.Cert
 }
 
 func (s *PostgresStore) GetCertificateBySerial(ctx context.Context, serialNumber string) (*pkistore.CertRecord, error) {
+	// env_id selects the issuing CA. An empty value is the org intermediate,
+	// not an environment CA.
 	row := s.pool.QueryRow(ctx,
-		`SELECT id, serial_number, cert_type, org_id, subject_cn, cert_pem, status, issued_at, expires_at
+		`SELECT id, serial_number, cert_type, org_id, COALESCE(env_id, ''), subject_cn, cert_pem, status, issued_at, expires_at
 		 FROM certificates WHERE serial_number = $1`, serialNumber)
 
 	var r pkistore.CertRecord
-	err := row.Scan(&r.ID, &r.SerialNumber, &r.CertType, &r.OrgID, &r.SubjectCN, &r.CertPEM, &r.Status, &r.IssuedAt, &r.ExpiresAt)
+	err := row.Scan(&r.ID, &r.SerialNumber, &r.CertType, &r.OrgID, &r.EnvID, &r.SubjectCN, &r.CertPEM, &r.Status, &r.IssuedAt, &r.ExpiresAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

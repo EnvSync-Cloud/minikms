@@ -315,6 +315,16 @@ func setupVaultTest(t *testing.T) *vaultTestCtx {
 	memberSerial := memberCert.SerialNumber.Text(16)
 
 	_ = certStore.StoreCertificate(context.Background(), &pkistore.CertRecord{
+		SerialNumber: orgCASerial,
+		CertType:     "org_intermediate_ca",
+		OrgID:        "org-001",
+		SubjectCN:    orgCACert.Subject.CommonName,
+		CertPEM:      string(orgCACertPEM),
+		Status:       "active",
+		IssuedAt:     orgCACert.NotBefore,
+		ExpiresAt:    orgCACert.NotAfter,
+	})
+	_ = certStore.StoreCertificate(context.Background(), &pkistore.CertRecord{
 		SerialNumber: memberSerial,
 		CertType:     "member",
 		OrgID:        "org-001",

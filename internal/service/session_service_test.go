@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -249,8 +250,16 @@ func setupTestSessionService(t *testing.T) (*SessionService, *mockTokenRegistry,
 	return svc, registry, certStore, policyStore
 }
 
-func createTestMemberCert(t *testing.T) (*ecdsa.PrivateKey, *x509.Certificate, []byte, string) {
+func createTestMemberCert(t *testing.T, certStore *mockCertStore) (*ecdsa.PrivateKey, *x509.Certificate, []byte, string) {
 	t.Helper()
+	return createTestMemberCertFor(t, certStore, "member-001", "alice@example.com", "org-001", "admin")
+}
+
+func createTestMemberCertFor(t *testing.T, certStore *mockCertStore, memberID, email, orgID, role string) (*ecdsa.PrivateKey, *x509.Certificate, []byte, string) {
+	t.Helper()
+	if certStore == nil {
+		t.Fatal("cert store is required")
+	}
 
 	// Generate a root CA
 	rootKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
@@ -266,8 +275,14 @@ func createTestMemberCert(t *testing.T) (*ecdsa.PrivateKey, *x509.Certificate, [
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	rootDER, _ := x509.CreateCertificate(rand.Reader, rootTemplate, rootTemplate, &rootKey.PublicKey, rootKey)
-	rootCert, _ := x509.ParseCertificate(rootDER)
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTemplate, rootTemplate, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatalf("CreateCertificate root: %v", err)
+	}
+	rootCert, err := x509.ParseCertificate(rootDER)
+	if err != nil {
+		t.Fatalf("ParseCertificate root: %v", err)
+	}
 
 	// Create org CA
 	orgCAKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
@@ -282,13 +297,33 @@ func createTestMemberCert(t *testing.T) (*ecdsa.PrivateKey, *x509.Certificate, [
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
+		MaxPathLen:            1,
 	}
-	orgCADER, _ := x509.CreateCertificate(rand.Reader, orgCATemplate, rootCert, &orgCAKey.PublicKey, rootKey)
-	orgCACert, _ := x509.ParseCertificate(orgCADER)
+	orgCADER, err := x509.CreateCertificate(rand.Reader, orgCATemplate, rootCert, &orgCAKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatalf("CreateCertificate org CA: %v", err)
+	}
+	orgCACert, err := x509.ParseCertificate(orgCADER)
+	if err != nil {
+		t.Fatalf("ParseCertificate org CA: %v", err)
+	}
+	orgCAPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: orgCADER})
+	if err := certStore.StoreCertificate(context.Background(), &pkistore.CertRecord{
+		SerialNumber: orgCACert.SerialNumber.Text(16),
+		CertType:     "org_intermediate_ca",
+		OrgID:        orgID,
+		SubjectCN:    orgCACert.Subject.CommonName,
+		CertPEM:      string(orgCAPEM),
+		Status:       "active",
+		IssuedAt:     orgCACert.NotBefore,
+		ExpiresAt:    orgCACert.NotAfter,
+	}); err != nil {
+		t.Fatalf("store org CA: %v", err)
+	}
 
 	// Issue member cert using pki package
 	memberCert, memberKey, certDER, err := pki.CreateMemberCertificate(
-		"member-001", "alice@example.com", "org-001", "admin",
+		memberID, email, orgID, role,
 		orgCACert, orgCAKey,
 		365*24*time.Hour, nil,
 	)
@@ -308,7 +343,7 @@ func TestValidateSession(t *testing.T) {
 	svc, _, certStore, _ := setupTestSessionService(t)
 	ctx := context.Background()
 
-	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t, certStore)
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -353,7 +388,7 @@ func TestRevokeSession(t *testing.T) {
 	svc, _, certStore, _ := setupTestSessionService(t)
 	ctx := context.Background()
 
-	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t, certStore)
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -386,7 +421,7 @@ func TestListSessions(t *testing.T) {
 	svc, _, certStore, _ := setupTestSessionService(t)
 	ctx := context.Background()
 
-	_, _, certPEM, serialHex := createTestMemberCert(t)
+	_, _, certPEM, serialHex := createTestMemberCert(t, certStore)
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -521,7 +556,7 @@ func TestSessionTokenValidAcrossServicesWithSharedSigningKey(t *testing.T) {
 	validatorService := NewSessionService(validatorKey, "test-issuer", time.Hour, registry, certStore, policyStore, auditLogger, store.NewMemoryChallengeStore())
 
 	ctx := context.Background()
-	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t, certStore)
 	if err := certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -549,7 +584,7 @@ func TestCreateSessionByCert_CustomScopes(t *testing.T) {
 	svc, _, certStore, _ := setupTestSessionService(t)
 	ctx := context.Background()
 
-	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t, certStore)
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -591,7 +626,7 @@ func TestValidateSession_Expired(t *testing.T) {
 	}
 	policyStore.mu.Unlock()
 
-	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t, certStore)
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -661,7 +696,7 @@ func TestValidateSessionFromToken(t *testing.T) {
 	svc, _, certStore, _ := setupTestSessionService(t)
 	ctx := context.Background()
 
-	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t, certStore)
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -695,7 +730,7 @@ func TestCreateSessionByCert(t *testing.T) {
 	svc, _, certStore, _ := setupTestSessionService(t)
 	ctx := context.Background()
 
-	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t, certStore)
 
 	// Register the cert
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
@@ -743,7 +778,7 @@ func TestCreateSessionByCert_BadSignature(t *testing.T) {
 	svc, _, certStore, _ := setupTestSessionService(t)
 	ctx := context.Background()
 
-	_, _, certPEM, serialHex := createTestMemberCert(t)
+	_, _, certPEM, serialHex := createTestMemberCert(t, certStore)
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -772,7 +807,7 @@ func TestCreateSessionByCert_RevokedCert(t *testing.T) {
 	svc, _, certStore, _ := setupTestSessionService(t)
 	ctx := context.Background()
 
-	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t, certStore)
 	rec := &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -801,7 +836,7 @@ func TestRevokeMemberSessions(t *testing.T) {
 	svc, _, certStore, policyStore := setupTestSessionService(t)
 	ctx := context.Background()
 
-	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t, certStore)
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -855,7 +890,7 @@ func signIssuedChallenge(t *testing.T, svc *SessionService, key *ecdsa.PrivateKe
 func TestCreateSessionByCert_ReplayNonce(t *testing.T) {
 	svc, _, certStore, _ := setupTestSessionService(t)
 	ctx := context.Background()
-	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t, certStore)
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -886,7 +921,7 @@ func TestIssueSessionChallenge_UnknownSerial(t *testing.T) {
 func TestCreateSessionByCert_UnissuedNonce(t *testing.T) {
 	svc, _, certStore, _ := setupTestSessionService(t)
 	ctx := context.Background()
-	memberKey, _, certPEM, serialHex := createTestMemberCert(t)
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t, certStore)
 	_ = certStore.StoreCertificate(ctx, &pkistore.CertRecord{
 		SerialNumber: serialHex,
 		CertType:     "member",
@@ -916,4 +951,231 @@ func TestCreateSessionByCert_UnissuedNonce(t *testing.T) {
 // sha256Sum is a helper to compute SHA-256.
 func sha256Sum(data []byte) [32]byte {
 	return sha256.Sum256(data)
+}
+
+func storeActiveMember(t *testing.T, certStore *mockCertStore, orgID, serial, certPEM string) {
+	t.Helper()
+	if err := certStore.StoreCertificate(context.Background(), &pkistore.CertRecord{
+		SerialNumber: serial,
+		CertType:     "member",
+		OrgID:        orgID,
+		CertPEM:      certPEM,
+		Status:       "active",
+		IssuedAt:     time.Now().Add(-time.Hour),
+		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("store member: %v", err)
+	}
+}
+
+func assertNoSessions(t *testing.T, registry *mockTokenRegistry) {
+	t.Helper()
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	if len(registry.tokens) != 0 {
+		t.Fatalf("created %d sessions, want 0", len(registry.tokens))
+	}
+}
+
+func assertUnauthenticated(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected unauthenticated error")
+	}
+	assertErrorKind(t, err, ErrorUnauthenticated)
+}
+
+func selfSignedMemberPEM(t *testing.T, serial *big.Int, memberID, orgID, role string) (*ecdsa.PrivateKey, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	memberExt, err := asn1.Marshal(memberID)
+	if err != nil {
+		t.Fatalf("marshal member id: %v", err)
+	}
+	orgExt, err := asn1.Marshal(orgID)
+	if err != nil {
+		t.Fatalf("marshal org id: %v", err)
+	}
+	roleExt, err := asn1.Marshal(role)
+	if err != nil {
+		t.Fatalf("marshal role: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: memberID},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+		ExtraExtensions: []pkix.Extension{
+			{Id: pki.OIDMemberID, Value: memberExt},
+			{Id: pki.OIDOrgID, Value: orgExt},
+			{Id: pki.OIDRole, Value: roleExt},
+		},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+	return key, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+func TestCreateSessionByCert_SelfSignedKnownSerial(t *testing.T) {
+	svc, registry, certStore, _ := setupTestSessionService(t)
+	ctx := context.Background()
+
+	_, memberCert, legitPEM, serialHex := createTestMemberCert(t, certStore)
+	storeActiveMember(t, certStore, "org-001", serialHex, string(legitPEM))
+
+	attackerKey, attackerPEM := selfSignedMemberPEM(t, memberCert.SerialNumber, "member-001", "org-001", "master")
+	ch, err := svc.IssueSessionChallenge(ctx, serialHex)
+	if err != nil {
+		t.Fatalf("IssueSessionChallenge: %v", err)
+	}
+	sum := sha256Sum(ch.Nonce)
+	sig, err := ecdsa.SignASN1(rand.Reader, attackerKey, sum[:])
+	if err != nil {
+		t.Fatalf("SignASN1: %v", err)
+	}
+
+	resp, err := svc.CreateSessionByCert(ctx, &CreateSessionByCertRequest{
+		CertPEM:     string(attackerPEM),
+		SignedNonce: sig,
+		Nonce:       ch.Nonce,
+	})
+	if resp != nil {
+		t.Fatal("self-signed certificate returned a session")
+	}
+	assertUnauthenticated(t, err)
+	assertNoSessions(t, registry)
+}
+
+func TestCreateSessionByCert_SelfSignedRegistryPEM(t *testing.T) {
+	svc, registry, certStore, _ := setupTestSessionService(t)
+	ctx := context.Background()
+
+	// Org CA is active, but it did not issue this certificate.
+	createTestMemberCert(t, certStore)
+	serial := big.NewInt(99)
+	key, certPEM := selfSignedMemberPEM(t, serial, "member-001", "org-001", "admin")
+	serialHex := serial.Text(16)
+	storeActiveMember(t, certStore, "org-001", serialHex, string(certPEM))
+
+	nonce, sig := signIssuedChallenge(t, svc, key, serialHex)
+	resp, err := svc.CreateSessionByCert(ctx, &CreateSessionByCertRequest{
+		CertPEM:     string(certPEM),
+		SignedNonce: sig,
+		Nonce:       nonce,
+	})
+	if resp != nil {
+		t.Fatal("self-signed registry certificate returned a session")
+	}
+	assertUnauthenticated(t, err)
+	assertNoSessions(t, registry)
+}
+
+func TestCreateSessionByCert_PEMMismatch(t *testing.T) {
+	svc, registry, certStore, _ := setupTestSessionService(t)
+	ctx := context.Background()
+
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t, certStore)
+	storeActiveMember(t, certStore, "org-001", serialHex, string(certPEM))
+	tampered := string(certPEM) + "\n"
+	if tampered == string(certPEM) {
+		t.Fatal("tampered PEM must differ from the registry PEM")
+	}
+
+	nonce, sig := signIssuedChallenge(t, svc, memberKey, serialHex)
+	resp, err := svc.CreateSessionByCert(ctx, &CreateSessionByCertRequest{
+		CertPEM:     tampered,
+		SignedNonce: sig,
+		Nonce:       nonce,
+	})
+	if resp != nil {
+		t.Fatal("mismatched PEM returned a session")
+	}
+	assertUnauthenticated(t, err)
+	assertNoSessions(t, registry)
+}
+
+func TestCreateSessionByCert_IdentityFromRegistry(t *testing.T) {
+	svc, _, certStore, _ := setupTestSessionService(t)
+	ctx := context.Background()
+
+	const (
+		memberID = "member-from-registry"
+		orgID    = "org-from-registry"
+		role     = "readonly"
+	)
+	memberKey, _, certPEM, serialHex := createTestMemberCertFor(
+		t, certStore, memberID, "registry@example.com", orgID, role,
+	)
+	storeActiveMember(t, certStore, orgID, serialHex, string(certPEM))
+
+	resp := mintTestSession(t, svc, memberKey, string(certPEM), serialHex, nil)
+	validated, err := svc.ValidateSession(ctx, &ValidateSessionRequest{SessionToken: resp.SessionToken})
+	if err != nil {
+		t.Fatalf("ValidateSession: %v", err)
+	}
+	if !validated.Valid {
+		t.Fatal("session should be valid")
+	}
+
+	rec, err := certStore.GetCertificateBySerial(ctx, serialHex)
+	if err != nil || rec == nil {
+		t.Fatalf("registry record: %v", err)
+	}
+	stored, err := parseCertificatePEM(rec.CertPEM)
+	if err != nil {
+		t.Fatalf("parse registry PEM: %v", err)
+	}
+	if validated.MemberID != pki.ExtractOIDValue(stored, pki.OIDMemberID) || validated.MemberID != memberID {
+		t.Errorf("MemberID = %q, want registry member %q", validated.MemberID, memberID)
+	}
+	if validated.OrgID != rec.OrgID || validated.OrgID != orgID {
+		t.Errorf("OrgID = %q, want registry org %q", validated.OrgID, orgID)
+	}
+	if validated.Role != pki.ExtractOIDValue(stored, pki.OIDRole) || validated.Role != role {
+		t.Errorf("Role = %q, want registry role %q", validated.Role, role)
+	}
+	if validated.CertSerial != rec.SerialNumber {
+		t.Errorf("CertSerial = %q, want registry serial %q", validated.CertSerial, rec.SerialNumber)
+	}
+}
+
+func TestCreateSessionByCert_ChainedRegistryCertSucceeds(t *testing.T) {
+	svc, registry, certStore, _ := setupTestSessionService(t)
+	ctx := context.Background()
+
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t, certStore)
+	storeActiveMember(t, certStore, "org-001", serialHex, string(certPEM))
+
+	resp := mintTestSession(t, svc, memberKey, string(certPEM), serialHex, []string{"vault:read"})
+	if resp.SessionToken == "" {
+		t.Fatal("SessionToken is empty")
+	}
+	if resp.ExpiresAt.Before(time.Now()) {
+		t.Fatal("ExpiresAt is in the past")
+	}
+
+	validated, err := svc.ValidateSession(ctx, &ValidateSessionRequest{SessionToken: resp.SessionToken})
+	if err != nil {
+		t.Fatalf("ValidateSession: %v", err)
+	}
+	if !validated.Valid {
+		t.Fatal("chained registry certificate should create a valid session")
+	}
+	if validated.MemberID != "member-001" || validated.OrgID != "org-001" || validated.Role != "admin" {
+		t.Fatalf("session identity = %s/%s/%s, want member-001/org-001/admin", validated.MemberID, validated.OrgID, validated.Role)
+	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	if len(registry.tokens) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(registry.tokens))
+	}
 }
