@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/authn"
 	"github.com/envsync-cloud/minikms/internal/testutil"
 )
 
@@ -25,8 +26,10 @@ func TestAuditService_GetAuditLogs(t *testing.T) {
 	_ = logger.Log(ctx, "org1", "decrypt", "user1", "decrypted secret", "")
 	_ = logger.Log(ctx, "org1", "rotate", "system", "rotated key", "")
 
+	readCtx := authn.WithPrincipal(ctx, authn.Principal{TenantID: "org1", ActorID: "user1"})
+
 	t.Run("with limit", func(t *testing.T) {
-		resp, err := svc.GetAuditLogs(ctx, &GetAuditLogsRequest{
+		resp, err := svc.GetAuditLogs(readCtx, &GetAuditLogsRequest{
 			OrgID:  "org1",
 			Limit:  2,
 			Offset: 0,
@@ -40,7 +43,7 @@ func TestAuditService_GetAuditLogs(t *testing.T) {
 	})
 
 	t.Run("with offset", func(t *testing.T) {
-		resp, err := svc.GetAuditLogs(ctx, &GetAuditLogsRequest{
+		resp, err := svc.GetAuditLogs(readCtx, &GetAuditLogsRequest{
 			OrgID:  "org1",
 			Limit:  10,
 			Offset: 1,

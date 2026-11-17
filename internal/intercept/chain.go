@@ -54,6 +54,7 @@ type bearerClaims struct {
 	jwt.RegisteredClaims
 	OrgID string `json:"org_id,omitempty"`
 	Org   string `json:"org,omitempty"`
+	Role  string `json:"role,omitempty"`
 }
 
 func (c bearerClaims) tenantID() string {
@@ -155,7 +156,11 @@ func (c *chain) authenticate(ctx context.Context, fullMethod string) (context.Co
 	if err != nil || entry == nil {
 		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
 	}
-	return authn.WithPrincipal(ctx, authn.Principal{TenantID: tenantID, ActorID: actorID}), nil
+	return authn.WithPrincipal(ctx, authn.Principal{
+		TenantID: tenantID,
+		ActorID:  actorID,
+		Role:     claims.Role,
+	}), nil
 }
 
 func bearerToken(ctx context.Context) (string, error) {

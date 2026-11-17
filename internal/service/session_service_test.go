@@ -182,22 +182,33 @@ func (m *mockPolicyStore) GetOrgSecurityPolicy(_ context.Context, orgID string) 
 	}, nil
 }
 
-func (m *mockPolicyStore) GetTokensBySubject(_ context.Context, subjectHash string) ([]*auth.TokenEntry, error) {
+func scopedTokenKey(orgID, subjectHash string) string {
+	return orgID + "\x00" + subjectHash
+}
+
+func (m *mockPolicyStore) addToken(orgID, subjectHash string, entry *auth.TokenEntry) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := scopedTokenKey(orgID, subjectHash)
+	m.tokens[key] = append(m.tokens[key], entry)
+}
+
+func (m *mockPolicyStore) GetTokensBySubject(_ context.Context, orgID, subjectHash string) ([]*auth.TokenEntry, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var result []*auth.TokenEntry
-	for _, e := range m.tokens[subjectHash] {
+	for _, e := range m.tokens[scopedTokenKey(orgID, subjectHash)] {
 		cp := *e
 		result = append(result, &cp)
 	}
 	return result, nil
 }
 
-func (m *mockPolicyStore) RevokeTokensBySubject(_ context.Context, subjectHash string) (int, error) {
+func (m *mockPolicyStore) RevokeTokensBySubject(_ context.Context, orgID, subjectHash string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	count := 0
-	for _, e := range m.tokens[subjectHash] {
+	for _, e := range m.tokens[scopedTokenKey(orgID, subjectHash)] {
 		if !e.Revoked {
 			e.Revoked = true
 			count++
@@ -436,6 +447,7 @@ func TestListSessions(t *testing.T) {
 	// data from our mock. Since the mock's tokens map is empty (sessions
 	// are stored in the tokenRegistry, not policyStore in this test setup),
 	// we expect an empty list.
+	ctx = principalCtx("org-001", "member-001", "admin")
 	resp, err := svc.ListSessions(ctx, "member-001", "org-001")
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
@@ -852,16 +864,15 @@ func TestRevokeMemberSessions(t *testing.T) {
 
 	// Seed the policy store with the token entry so RevokeMemberSessions finds it
 	subjectHash := auth.HashSubject("member-001")
-	policyStore.mu.Lock()
-	policyStore.tokens[subjectHash] = append(policyStore.tokens[subjectHash], &auth.TokenEntry{
+	policyStore.addToken("org-001", subjectHash, &auth.TokenEntry{
 		JTI:         "some-jti",
 		SubjectHash: subjectHash,
 		IssuedAt:    time.Now(),
 		ExpiresAt:   time.Now().Add(time.Hour),
 		Revoked:     false,
 	})
-	policyStore.mu.Unlock()
 
+	ctx = principalCtx("org-001", "member-001", "admin")
 	count, err := svc.RevokeMemberSessions(ctx, "member-001", "org-001")
 	if err != nil {
 		t.Fatalf("RevokeMemberSessions: %v", err)

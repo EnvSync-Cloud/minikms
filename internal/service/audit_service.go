@@ -29,13 +29,19 @@ type GetAuditLogsResponse struct {
 	Entries []*audit.AuditEntry
 }
 
-// GetAuditLogs returns audit log entries for an organization.
+// GetAuditLogs returns audit log entries for the caller's organization.
+// There is no platform-admin flag, so the caller-supplied org id is not the
+// query tenant. A different org id is denied.
 func (s *AuditService) GetAuditLogs(ctx context.Context, req *GetAuditLogsRequest) (*GetAuditLogsResponse, error) {
 	if req == nil {
 		return nil, invalidArgument("request is required")
 	}
-	if err := requireFields(requiredField("org_id", req.OrgID)); err != nil {
+	principal, err := requirePrincipal(ctx)
+	if err != nil {
 		return nil, err
+	}
+	if req.OrgID != "" && req.OrgID != principal.TenantID {
+		return nil, NewDomainError(ErrorPermissionDenied, "tenant access denied", nil)
 	}
 	if req.Limit <= 0 || req.Limit > 1000 {
 		return nil, invalidArgument("limit must be between 1 and 1000")
@@ -44,7 +50,7 @@ func (s *AuditService) GetAuditLogs(ctx context.Context, req *GetAuditLogsReques
 		return nil, invalidArgument("offset must not be negative")
 	}
 
-	entries, err := s.store.GetEntries(ctx, req.OrgID, req.Limit, req.Offset)
+	entries, err := s.store.GetEntries(ctx, principal.TenantID, req.Limit, req.Offset)
 	if err != nil {
 		return nil, internalError("failed to get audit logs", err)
 	}

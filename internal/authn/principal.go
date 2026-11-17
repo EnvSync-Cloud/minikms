@@ -5,8 +5,9 @@ import "context"
 
 // Principal is the caller established by a validated session token.
 type Principal struct {
-	TenantID string // JWT org_id
+	TenantID string // JWT org_id or org
 	ActorID  string // JWT subject
+	Role     string // JWT role; empty is not an org admin
 }
 
 type principalContextKey struct{}

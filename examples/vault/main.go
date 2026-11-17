@@ -301,7 +301,7 @@ func main() {
 	fmt.Println("--- 7. Audit Trail ---")
 
 	// Collect audit logs for the main tenant
-	auditResp, err := auditSvc.GetAuditLogs(ctx, &service.GetAuditLogsRequest{
+	auditResp, err := auditSvc.GetAuditLogs(demoPrincipal(tenantID), &service.GetAuditLogsRequest{
 		OrgID:  tenantID,
 		Limit:  20,
 		Offset: 0,
@@ -325,7 +325,7 @@ func main() {
 	fmt.Printf("  Audit chain integrity: valid=%v\n", chainResp.Valid)
 
 	// Also check the PKI org's audit
-	pkiAuditResp, err := auditSvc.GetAuditLogs(ctx, &service.GetAuditLogsRequest{
+	pkiAuditResp, err := auditSvc.GetAuditLogs(demoPrincipal(orgID), &service.GetAuditLogsRequest{
 		OrgID:  orgID,
 		Limit:  20,
 		Offset: 0,

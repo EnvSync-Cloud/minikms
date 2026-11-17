@@ -25,8 +25,10 @@ import (
 // SessionPolicyStore defines the policy/token methods SessionService needs from the store.
 type SessionPolicyStore interface {
 	GetOrgSecurityPolicy(ctx context.Context, orgID string) (*store.OrgSecurityPolicy, error)
-	GetTokensBySubject(ctx context.Context, subjectHash string) ([]*auth.TokenEntry, error)
-	RevokeTokensBySubject(ctx context.Context, subjectHash string) (int, error)
+	// GetTokensBySubject returns unexpired tokens for subjectHash in orgID only.
+	GetTokensBySubject(ctx context.Context, orgID, subjectHash string) ([]*auth.TokenEntry, error)
+	// RevokeTokensBySubject revokes unexpired tokens for subjectHash in orgID only.
+	RevokeTokensBySubject(ctx context.Context, orgID, subjectHash string) (int, error)
 }
 
 // SessionService manages time-based session tokens tied to member certificates.
@@ -392,22 +394,20 @@ func (s *SessionService) RevokeSession(ctx context.Context, sessionToken string)
 	return nil
 }
 
-// RevokeMemberSessions invalidates all sessions for a member.
+// RevokeMemberSessions invalidates all sessions for a member in the caller's org.
 func (s *SessionService) RevokeMemberSessions(ctx context.Context, memberID, orgID string) (int, error) {
-	if err := requireFields(
-		requiredField("member_id", memberID),
-		requiredField("org_id", orgID),
-	); err != nil {
+	principal, err := authorizeMemberSessionAccess(ctx, memberID, orgID)
+	if err != nil {
 		return 0, err
 	}
 
 	subjectHash := auth.HashSubject(memberID)
-	count, err := s.policyStore.RevokeTokensBySubject(ctx, subjectHash)
+	count, err := s.policyStore.RevokeTokensBySubject(ctx, principal.TenantID, subjectHash)
 	if err != nil {
 		return 0, internalError("failed to revoke member sessions", err)
 	}
 
-	_ = s.auditLogger.Log(ctx, orgID, "member_sessions_revoked", memberID,
+	_ = s.auditLogger.Log(ctx, principal.TenantID, "member_sessions_revoked", principal.ActorID,
 		fmt.Sprintf("All sessions revoked for member %s (%d sessions)", memberID, count), "")
 
 	return count, nil
@@ -428,17 +428,15 @@ type SessionInfo struct {
 	Revoked    bool
 }
 
-// ListSessions returns active sessions for a member.
+// ListSessions returns active sessions for a member in the caller's org.
 func (s *SessionService) ListSessions(ctx context.Context, memberID, orgID string) (*ListSessionsResponse, error) {
-	if err := requireFields(
-		requiredField("member_id", memberID),
-		requiredField("org_id", orgID),
-	); err != nil {
+	principal, err := authorizeMemberSessionAccess(ctx, memberID, orgID)
+	if err != nil {
 		return nil, err
 	}
 
 	subjectHash := auth.HashSubject(memberID)
-	entries, err := s.policyStore.GetTokensBySubject(ctx, subjectHash)
+	entries, err := s.policyStore.GetTokensBySubject(ctx, principal.TenantID, subjectHash)
 	if err != nil {
 		return nil, internalError("failed to list sessions", err)
 	}
@@ -474,7 +472,7 @@ func (s *SessionService) issueSessionToken(ctx context.Context, memberID, orgID,
 	}
 
 	subjectHash := auth.HashSubject(memberID)
-	existingTokens, err := s.policyStore.GetTokensBySubject(ctx, subjectHash)
+	existingTokens, err := s.policyStore.GetTokensBySubject(ctx, orgID, subjectHash)
 	if err != nil {
 		return nil, internalError("failed to check existing sessions", err)
 	}

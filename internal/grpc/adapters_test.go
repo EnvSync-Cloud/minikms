@@ -322,7 +322,10 @@ func setupAuditAdapter(t *testing.T) *AuditAdapter {
 
 func TestAuditAdapter_GetAuditLogs(t *testing.T) {
 	adapter := setupAuditAdapter(t)
-	ctx := context.Background()
+	ctx := authn.WithPrincipal(context.Background(), authn.Principal{
+		TenantID: "org-1",
+		ActorID:  "actor-org-1",
+	})
 
 	resp, err := adapter.GetAuditLogs(ctx, &pb.GetAuditLogsRequest{
 		OrgId:  "org-1",
@@ -732,8 +735,13 @@ func TestSessionAdapter_RevokeSession_Invalid(t *testing.T) {
 
 func TestSessionAdapter_ListSessions(t *testing.T) {
 	adapter, _ := setupSessionAdapter(t)
+	ctx := authn.WithPrincipal(context.Background(), authn.Principal{
+		TenantID: "org-1",
+		ActorID:  "member-1",
+		Role:     "member",
+	})
 
-	resp, err := adapter.ListSessions(context.Background(), &pb.ListSessionsRequest{
+	resp, err := adapter.ListSessions(ctx, &pb.ListSessionsRequest{
 		MemberId: "member-1",
 		OrgId:    "org-1",
 	})

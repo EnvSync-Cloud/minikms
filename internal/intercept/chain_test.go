@@ -254,6 +254,31 @@ func TestAuthInterceptorSetsPrincipal(t *testing.T) {
 	}
 }
 
+func TestAuthInterceptorCopiesRole(t *testing.T) {
+	raw := signToken(t, jwt.MapClaims{
+		"jti":  "jti-role",
+		"sub":  "actor-role",
+		"org":  "tenant-role",
+		"role": "admin",
+		"exp":  time.Now().Add(time.Hour).Unix(),
+	})
+	c := &chain{validator: &fakeValidator{}, limiter: &fakeLimiter{allow: true}}
+	inCtx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+raw))
+	_, err := c.authUnary(inCtx, nil, &grpc.UnaryServerInfo{FullMethod: pb.SessionService_ListSessions_FullMethodName}, func(ctx context.Context, _ any) (any, error) {
+		p, ok := authn.FromContext(ctx)
+		if !ok {
+			t.Fatal("missing principal")
+		}
+		if p != (authn.Principal{TenantID: "tenant-role", ActorID: "actor-role", Role: "admin"}) {
+			t.Fatalf("principal = %+v", p)
+		}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatalf("authUnary: %v", err)
+	}
+}
+
 func TestAuthInterceptorRejectsInvalidSession(t *testing.T) {
 	raw := signToken(t, auth.Claims{
 		RegisteredClaims: jwt.RegisteredClaims{ID: "jti-bad", Subject: "actor"},
