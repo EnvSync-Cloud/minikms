@@ -65,6 +65,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
+	if !cfg.TLSEnabled && !cfg.MayServePlaintext() {
+		log.Fatalf("Refusing to start without TLS: set MINIKMS_TLS_ENABLED=true or MINIKMS_ALLOW_INSECURE=true for local development only")
+	}
 
 	// Load root key — this is the ONLY place the root key is loaded (Issue #1)
 	rootKeyHolder := keys.GetRootKeyHolder()
@@ -195,7 +198,7 @@ func main() {
 	vaultAdapter := grpcadapter.NewVaultAdapter(vaultSvc)
 	sessionAdapter := grpcadapter.NewSessionAdapter(sessionSvc)
 
-	// Create gRPC server
+	// Create gRPC server. Plaintext listens only with an explicit opt-in.
 	var opts []grpc.ServerOption
 	if cfg.TLSEnabled {
 		creds, err := loadMTLSServerCreds(cfg)
@@ -203,6 +206,10 @@ func main() {
 			log.Fatalf("Failed to load TLS credentials: %v", err)
 		}
 		opts = append(opts, grpc.Creds(creds))
+	} else if !cfg.MayServePlaintext() {
+		log.Fatalf("Refusing to start without TLS: set MINIKMS_TLS_ENABLED=true or MINIKMS_ALLOW_INSECURE=true for local development only")
+	} else {
+		log.Printf("WARNING: serving without TLS because MINIKMS_ALLOW_INSECURE=true (local development only)")
 	}
 
 	grpcServer := grpc.NewServer(opts...)
@@ -219,8 +226,9 @@ func main() {
 	healthpb.RegisterHealthServer(grpcServer, healthServer)
 	healthServer.SetServingStatus("minikms", healthpb.HealthCheckResponse_SERVING)
 
-	// Enable server reflection for debugging
-	reflection.Register(grpcServer)
+	if cfg.ReflectionEnabled {
+		reflection.Register(grpcServer)
+	}
 
 	// Start listening
 	listener, err := net.Listen("tcp", cfg.GRPCAddr)

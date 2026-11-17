@@ -28,6 +28,7 @@ key, CA, session registry entry, or vault record.
 - One 32-byte root encryption key encoded as 64 hexadecimal characters.
 - One self-signed P-384 Root CA certificate/private-key pair.
 - One P-256 session-signing private key.
+- A gRPC server certificate, its private key, and the client CA certificate used for mTLS.
 - A secret-management mechanism such as External Secrets, Secrets Store CSI,
   or a manually created Kubernetes Secret.
 
@@ -50,7 +51,10 @@ kubectl create secret generic minikms-runtime-secrets \
   --from-file=root-key=/secure/minikms/root-key \
   --from-file=root-ca.crt=/secure/minikms/root-ca.crt \
   --from-file=root-ca.key=/secure/minikms/root-ca.key \
-  --from-file=session-signing-key.pem=/secure/minikms/session-signing-key.pem
+  --from-file=session-signing-key.pem=/secure/minikms/session-signing-key.pem \
+  --from-file=grpc-server-cert.pem=/secure/minikms/grpc-server-cert.pem \
+  --from-file=grpc-server-key.pem=/secure/minikms/grpc-server-key.pem \
+  --from-file=grpc-ca.crt=/secure/minikms/grpc-ca.crt
 
 kubectl create secret generic minikms-backend \
   --from-literal=db-url="$MINIKMS_DB_URL" \
@@ -87,10 +91,25 @@ kubectl apply -f deploy/kubernetes/minikms.yaml
 kubectl rollout status deployment/minikms
 ```
 
-The Deployment starts two replicas. Its gRPC readiness and liveness probes use
-the `minikms` health-service name. Startup fails before the server reports
-`SERVING` if a shared secret is missing or invalid, or if PostgreSQL or Redis
-cannot be reached.
+The Deployment starts two replicas. Readiness and liveness probes open a TCP
+connection to port 50051. Kubelet gRPC probes cannot present the client
+certificate this server requires, so they cannot complete the mTLS handshake.
+Startup fails before the server reports `SERVING` if a shared secret is missing
+or invalid, if the mTLS certificate, key, or client CA is missing, or if
+PostgreSQL or Redis cannot be reached.
+
+The manifest sets `MINIKMS_TLS_ENABLED=true` and reads
+`grpc-server-cert.pem`, `grpc-server-key.pem`, and `grpc-ca.crt` from the
+`minikms-runtime-secrets` volume (`MINIKMS_TLS_CERT`, `MINIKMS_TLS_KEY`, and
+`MINIKMS_TLS_CA_FILE`). It leaves `MINIKMS_ALLOW_INSECURE` and
+`MINIKMS_REFLECTION_ENABLED` false. The Service is ClusterIP and does not
+publish port 50051 outside the cluster. The NetworkPolicy allows ingress on
+TCP 50051 only from pods labeled `app.kubernetes.io/name: envsync-api`, and
+egress only to DNS (`k8s-app: kube-dns` in `kube-system`, UDP/TCP 53), pods
+labeled `app.kubernetes.io/name: postgres` on TCP 5432, and pods labeled
+`app.kubernetes.io/name: redis` on TCP 6379. Label in-cluster Postgres and
+Redis pods to match. Those are the dependencies already referenced by the
+`minikms-backend` Secret (`db-url` and `redis-url`).
 
 No leader election is needed for normal startup because the Root CA is
 externally provisioned. Organization CA creation uses a PostgreSQL advisory lock

@@ -31,6 +31,8 @@ x-minikms-environment: &minikms-environment
     +/uwOj2OXWah8oXg2U/DTXbgnt46cEas1yz4UcZvs0oFLTxi+visoABA
     -----END PRIVATE KEY-----
   MINIKMS_GRPC_ADDR: "0.0.0.0:50051"
+  # Local test stack only. Production must use TLS and leave this unset.
+  MINIKMS_ALLOW_INSECURE: "true"
 
 x-minikms-service: &minikms-service
   build: .

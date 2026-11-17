@@ -130,9 +130,11 @@ All configuration is via environment variables:
 | `MINIKMS_REDIS_URL` | Yes | — | Redis connection string (DEK caching) |
 | `MINIKMS_GRPC_ADDR` | No | `0.0.0.0:50051` | gRPC listen address |
 | `MINIKMS_HKDF_SALT` | No | `envsync-minikms-v1` | HKDF salt for key derivation |
-| `MINIKMS_TLS_ENABLED` | No | `false` | Enable TLS for gRPC |
-| `MINIKMS_TLS_CERT_FILE` | No | — | TLS certificate file path |
-| `MINIKMS_TLS_KEY_FILE` | No | — | TLS private key file path |
+| `MINIKMS_TLS_ENABLED` | No | `false` | Enable mTLS for gRPC. Startup refuses to listen when this is false unless `MINIKMS_ALLOW_INSECURE=true` |
+| `MINIKMS_ALLOW_INSECURE` | No | `false` | Local-development opt-in for a plaintext listener. Do not set this in production |
+| `MINIKMS_REFLECTION_ENABLED` | No | `false` | Register gRPC server reflection. Off unless set to true |
+| `MINIKMS_TLS_CERT` | Required if TLS | — | TLS certificate file path |
+| `MINIKMS_TLS_KEY` | Required if TLS | — | TLS private key file path |
 
 Exactly one of `MINIKMS_SESSION_SIGNING_KEY` and
 `MINIKMS_SESSION_SIGNING_KEY_FILE` must be configured. All miniKMS replicas must
@@ -190,6 +192,8 @@ chmod 600 ./session-signing-key.pem
 export MINIKMS_SESSION_SIGNING_KEY_FILE="./session-signing-key.pem"
 export MINIKMS_DB_URL="postgres://user:pass@localhost:5432/minikms?sslmode=disable"
 export MINIKMS_REDIS_URL="redis://localhost:6379/0"
+# Local development only. Omit this and set MINIKMS_TLS_ENABLED=true in any shared environment.
+export MINIKMS_ALLOW_INSECURE=true
 
 # Build and run
 make build
@@ -269,6 +273,7 @@ minikms:
     MINIKMS_ROOT_KEY: ${MINIKMS_ROOT_KEY}
     MINIKMS_SESSION_SIGNING_KEY_FILE: /run/secrets/minikms-session-signing-key
     MINIKMS_GRPC_ADDR: 0.0.0.0:50051
+    MINIKMS_ALLOW_INSECURE: "true"
   depends_on:
     - postgres
     - redis
