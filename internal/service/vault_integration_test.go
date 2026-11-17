@@ -64,7 +64,6 @@ func setupIntegrationStack(t *testing.T) *integrationStack {
 
 func TestVaultIntegration_FullSecretLifecycle(t *testing.T) {
 	stack := setupIntegrationStack(t)
-	ctx := context.Background()
 
 	type tenant struct {
 		id     string
@@ -96,7 +95,7 @@ func TestVaultIntegration_FullSecretLifecycle(t *testing.T) {
 				encrypted[tn.id][scope] = make(map[string]encResult)
 				for name, value := range secrets {
 					aad := fmt.Sprintf("%s:%s:%s", tn.id, scope, name)
-					resp, err := stack.kmsSvc.Encrypt(ctx, &EncryptRequest{
+					resp, err := stack.kmsSvc.Encrypt(ctxForTenant(tn.id), &EncryptRequest{
 						TenantID:  tn.id,
 						ScopeID:   scope,
 						Plaintext: []byte(value),
@@ -124,7 +123,7 @@ func TestVaultIntegration_FullSecretLifecycle(t *testing.T) {
 				for name, expectedValue := range secrets {
 					aad := fmt.Sprintf("%s:%s:%s", tn.id, scope, name)
 					enc := encrypted[tn.id][scope][name]
-					resp, err := stack.kmsSvc.Decrypt(ctx, &DecryptRequest{
+					resp, err := stack.kmsSvc.Decrypt(ctxForTenant(tn.id), &DecryptRequest{
 						TenantID:     tn.id,
 						ScopeID:      scope,
 						Ciphertext:   enc.ciphertext,
@@ -152,7 +151,7 @@ func TestVaultIntegration_FullSecretLifecycle(t *testing.T) {
 			enc := encrypted[alpha.id]["production"][name]
 			aad := fmt.Sprintf("%s:%s:%s", alpha.id, "production", name)
 
-			_, err := stack.kmsSvc.Decrypt(ctx, &DecryptRequest{
+			_, err := stack.kmsSvc.Decrypt(ctxForTenant(beta.id), &DecryptRequest{
 				TenantID:     beta.id,
 				ScopeID:      "production",
 				Ciphertext:   enc.ciphertext,
@@ -173,7 +172,7 @@ func TestVaultIntegration_FullSecretLifecycle(t *testing.T) {
 			enc := encrypted[tn.id]["production"][name]
 			aad := fmt.Sprintf("%s:%s:%s", tn.id, "production", name)
 
-			_, err := stack.kmsSvc.Decrypt(ctx, &DecryptRequest{
+			_, err := stack.kmsSvc.Decrypt(ctxForTenant(tn.id), &DecryptRequest{
 				TenantID:     tn.id,
 				ScopeID:      "staging",
 				Ciphertext:   enc.ciphertext,
@@ -194,7 +193,7 @@ func TestVaultIntegration_FullSecretLifecycle(t *testing.T) {
 		for name := range secrets {
 			enc := encrypted[tn.id][scope][name]
 
-			_, err := stack.kmsSvc.Decrypt(ctx, &DecryptRequest{
+			_, err := stack.kmsSvc.Decrypt(ctxForTenant(tn.id), &DecryptRequest{
 				TenantID:     tn.id,
 				ScopeID:      scope,
 				Ciphertext:   enc.ciphertext,
@@ -210,9 +209,8 @@ func TestVaultIntegration_FullSecretLifecycle(t *testing.T) {
 
 func TestVaultIntegration_KeyRotationContinuity(t *testing.T) {
 	stack := setupIntegrationStack(t)
-	ctx := context.Background()
-
 	tenantID := "rotation-tenant"
+	ctx := ctxForTenant(tenantID)
 	scopeID := "app-1"
 
 	// Step 1: Encrypt secrets under version 1
@@ -334,9 +332,8 @@ func TestVaultIntegration_KeyRotationContinuity(t *testing.T) {
 
 func TestVaultIntegration_BatchOperations(t *testing.T) {
 	stack := setupIntegrationStack(t)
-	ctx := context.Background()
-
 	tenantID := "batch-tenant"
+	ctx := ctxForTenant(tenantID)
 	scopeID := "batch-app"
 
 	// Step 1: Batch-encrypt 10 items
@@ -404,9 +401,8 @@ func TestVaultIntegration_BatchOperations(t *testing.T) {
 
 func TestVaultIntegration_AuditChainIntegrity(t *testing.T) {
 	stack := setupIntegrationStack(t)
-	ctx := context.Background()
-
 	tenantID := "audit-tenant"
+	ctx := ctxForTenant(tenantID)
 	scopeID := "audit-app"
 
 	// Step 1: Perform sequence of operations (key creation via encrypt, rotation)

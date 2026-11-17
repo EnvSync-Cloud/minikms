@@ -10,11 +10,19 @@ import (
 	"log"
 	"time"
 
+	"github.com/envsync-cloud/minikms/internal/authn"
 	"github.com/envsync-cloud/minikms/internal/keys"
 	"github.com/envsync-cloud/minikms/internal/pki"
 	"github.com/envsync-cloud/minikms/internal/service"
 	"github.com/envsync-cloud/minikms/internal/testutil"
 )
+
+func demoPrincipal(tenantID string) context.Context {
+	return authn.WithPrincipal(context.Background(), authn.Principal{
+		TenantID: tenantID,
+		ActorID:  "demo-" + tenantID,
+	})
+}
 
 func main() {
 	fmt.Println("========================================")
@@ -67,7 +75,7 @@ func main() {
 
 	for name, value := range secrets {
 		aad := fmt.Sprintf("%s:%s:%s", tenantID, scopeID, name)
-		resp, err := kmsSvc.Encrypt(ctx, &service.EncryptRequest{
+		resp, err := kmsSvc.Encrypt(demoPrincipal(tenantID), &service.EncryptRequest{
 			TenantID:  tenantID,
 			ScopeID:   scopeID,
 			Plaintext: []byte(value),
@@ -88,7 +96,7 @@ func main() {
 	fmt.Println("--- 2. Decrypt Secrets ---")
 	for name, enc := range encrypted {
 		aad := fmt.Sprintf("%s:%s:%s", tenantID, scopeID, name)
-		resp, err := kmsSvc.Decrypt(ctx, &service.DecryptRequest{
+		resp, err := kmsSvc.Decrypt(demoPrincipal(tenantID), &service.DecryptRequest{
 			TenantID:     tenantID,
 			ScopeID:      scopeID,
 			Ciphertext:   enc.ciphertext,
@@ -110,7 +118,7 @@ func main() {
 	// Try decrypting acme-corp's secret with globex-inc's context
 	for name, enc := range encrypted {
 		aad := fmt.Sprintf("%s:%s:%s", tenantID, scopeID, name)
-		_, err := kmsSvc.Decrypt(ctx, &service.DecryptRequest{
+		_, err := kmsSvc.Decrypt(demoPrincipal(otherTenant), &service.DecryptRequest{
 			TenantID:     otherTenant,
 			ScopeID:      scopeID,
 			Ciphertext:   enc.ciphertext,
@@ -139,7 +147,7 @@ func main() {
 	}
 	fmt.Printf("  Before rotation: key=%s, encryptions=%d\n", keyInfo.KeyVersionID, keyInfo.EncryptionCount)
 
-	rotateResp, err := keySvc.RotateDataKey(ctx, &service.RotateDataKeyRequest{
+	rotateResp, err := keySvc.RotateDataKey(demoPrincipal(tenantID), &service.RotateDataKeyRequest{
 		TenantID: tenantID,
 		ScopeID:  scopeID,
 	})
@@ -149,7 +157,7 @@ func main() {
 	fmt.Printf("  Rotated: new key=%s\n", rotateResp.NewKeyVersionID)
 
 	// Encrypt with new key
-	newResp, err := kmsSvc.Encrypt(ctx, &service.EncryptRequest{
+	newResp, err := kmsSvc.Encrypt(demoPrincipal(tenantID), &service.EncryptRequest{
 		TenantID:  tenantID,
 		ScopeID:   scopeID,
 		Plaintext: []byte("post-rotation-secret"),
@@ -161,7 +169,7 @@ func main() {
 	fmt.Printf("  Encrypted with new key: version=%s\n", newResp.KeyVersionID)
 
 	// Decrypt with new key
-	decResp, err := kmsSvc.Decrypt(ctx, &service.DecryptRequest{
+	decResp, err := kmsSvc.Decrypt(demoPrincipal(tenantID), &service.DecryptRequest{
 		TenantID:     tenantID,
 		ScopeID:      scopeID,
 		Ciphertext:   newResp.Ciphertext,
@@ -189,7 +197,7 @@ func main() {
 		}
 	}
 
-	batchEncResp, err := kmsSvc.BatchEncrypt(ctx, &service.BatchEncryptRequest{
+	batchEncResp, err := kmsSvc.BatchEncrypt(demoPrincipal(batchTenant), &service.BatchEncryptRequest{
 		TenantID: batchTenant,
 		ScopeID:  batchScope,
 		Items:    items,
@@ -212,7 +220,7 @@ func main() {
 		}
 	}
 
-	batchDecResp, err := kmsSvc.BatchDecrypt(ctx, &service.BatchDecryptRequest{
+	batchDecResp, err := kmsSvc.BatchDecrypt(demoPrincipal(batchTenant), &service.BatchDecryptRequest{
 		TenantID: batchTenant,
 		ScopeID:  batchScope,
 		Items:    decItems,

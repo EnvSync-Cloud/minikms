@@ -18,6 +18,9 @@ func WithPrincipal(ctx context.Context, p Principal) context.Context {
 
 // FromContext returns the principal stored by WithPrincipal.
 func FromContext(ctx context.Context) (Principal, bool) {
+	if ctx == nil {
+		return Principal{}, false
+	}
 	p, ok := ctx.Value(principalContextKey{}).(Principal)
 	return p, ok
 }

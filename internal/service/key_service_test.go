@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"testing"
 
 	"github.com/envsync-cloud/minikms/internal/keys"
@@ -19,7 +18,7 @@ func setupKeyService(t *testing.T) *KeyService {
 }
 
 func TestKeyService_CreateDataKey(t *testing.T) {
-	ctx := context.Background()
+	ctx := ctxForTenant("org1")
 	svc := setupKeyService(t)
 
 	resp, err := svc.CreateDataKey(ctx, &CreateDataKeyRequest{
@@ -35,7 +34,7 @@ func TestKeyService_CreateDataKey(t *testing.T) {
 }
 
 func TestKeyService_RotateDataKey(t *testing.T) {
-	ctx := context.Background()
+	ctx := ctxForTenant("org1")
 	svc := setupKeyService(t)
 
 	// Create first
@@ -61,7 +60,7 @@ func TestKeyService_RotateDataKey(t *testing.T) {
 }
 
 func TestKeyService_GetKeyInfo(t *testing.T) {
-	ctx := context.Background()
+	ctx := ctxForTenant("org1")
 	svc := setupKeyService(t)
 
 	// Create first

@@ -4,11 +4,32 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/envsync-cloud/minikms/internal/authn"
+	"github.com/envsync-cloud/minikms/internal/keys"
 	"github.com/envsync-cloud/minikms/internal/testutil"
 )
+
+func ctxForTenant(tenantID string) context.Context {
+	return authn.WithPrincipal(context.Background(), authn.Principal{
+		TenantID: tenantID,
+		ActorID:  "session-" + tenantID,
+	})
+}
+
+func assertErrorKind(t *testing.T, err error, kind ErrorKind) {
+	t.Helper()
+	var domainErr *DomainError
+	if !errors.As(err, &domainErr) {
+		t.Fatalf("error = %v, want kind %s", err, kind)
+	}
+	if domainErr.Kind != kind {
+		t.Fatalf("kind = %s, want %s", domainErr.Kind, kind)
+	}
+}
 
 func setupKMSService(t *testing.T) *KMSService {
 	t.Helper()
@@ -20,7 +41,7 @@ func setupKMSService(t *testing.T) *KMSService {
 }
 
 func TestKMSService_DecryptAfterRotation(t *testing.T) {
-	ctx := context.Background()
+	ctx := ctxForTenant("org-rotate")
 	_, _, dekMgr, _, auditLogger, auditStore, err := testutil.SetupTestKMSStack(testutil.TestRootKeyHex)
 	if err != nil {
 		t.Fatalf("SetupTestKMSStack: %v", err)
@@ -80,7 +101,7 @@ func TestKMSService_DecryptAfterRotation(t *testing.T) {
 }
 
 func TestKMSService_EncryptDecrypt(t *testing.T) {
-	ctx := context.Background()
+	ctx := ctxForTenant("org1")
 	svc := setupKMSService(t)
 
 	t.Run("roundtrip", func(t *testing.T) {
@@ -151,7 +172,7 @@ func TestKMSService_EncryptDecrypt(t *testing.T) {
 }
 
 func TestKMSService_BatchEncryptDecrypt(t *testing.T) {
-	ctx := context.Background()
+	ctx := ctxForTenant("org1")
 	svc := setupKMSService(t)
 
 	items := []BatchEncryptItem{
@@ -202,7 +223,7 @@ func TestKMSService_BatchEncryptDecrypt(t *testing.T) {
 }
 
 func TestKMSService_BatchDecryptMixedVersionsAfterRotation(t *testing.T) {
-	ctx := context.Background()
+	ctx := ctxForTenant("org1")
 	svc := setupKMSService(t)
 
 	oldResp, err := svc.Encrypt(ctx, &EncryptRequest{
@@ -241,7 +262,7 @@ func TestKMSService_BatchDecryptMixedVersionsAfterRotation(t *testing.T) {
 }
 
 func TestKMSService_BatchDecrypt_InvalidBase64(t *testing.T) {
-	ctx := context.Background()
+	ctx := ctxForTenant("org1")
 	svc := setupKMSService(t)
 
 	_, err := svc.BatchDecrypt(ctx, &BatchDecryptRequest{
@@ -253,5 +274,286 @@ func TestKMSService_BatchDecrypt_InvalidBase64(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid base64")
+	}
+}
+
+func TestKMSService_MissingPrincipalIsUnauthenticated(t *testing.T) {
+	_, _, dekMgr, dekStore, auditLogger, _, err := testutil.SetupTestKMSStack(testutil.TestRootKeyHex)
+	if err != nil {
+		t.Fatalf("SetupTestKMSStack: %v", err)
+	}
+	svc := NewKMSService(dekMgr, auditLogger)
+	keySvc := NewKeyService(dekMgr, keys.NewKeyVersionManager(dekStore, 1000), auditLogger)
+	owner := ctxForTenant("org-a")
+
+	enc, err := svc.Encrypt(owner, &EncryptRequest{
+		TenantID: "org-a", ScopeID: "app-a", Plaintext: []byte("org-a-plaintext"), AAD: "org-a-aad",
+	})
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	batch, err := svc.BatchEncrypt(owner, &BatchEncryptRequest{
+		TenantID: "org-a",
+		ScopeID:  "app-a",
+		Items:    []BatchEncryptItem{{Plaintext: []byte("batch-plaintext"), AAD: "batch-aad"}},
+	})
+	if err != nil {
+		t.Fatalf("BatchEncrypt: %v", err)
+	}
+
+	anon := context.Background()
+
+	t.Run("encrypt", func(t *testing.T) {
+		resp, err := svc.Encrypt(anon, &EncryptRequest{
+			TenantID: "org-a", ScopeID: "app-a", Plaintext: []byte("x"), AAD: "org-a-aad",
+		})
+		if resp != nil {
+			t.Fatal("encrypted without a principal")
+		}
+		assertErrorKind(t, err, ErrorUnauthenticated)
+	})
+
+	t.Run("decrypt", func(t *testing.T) {
+		resp, err := svc.Decrypt(anon, &DecryptRequest{
+			TenantID: "org-a", ScopeID: "app-a",
+			Ciphertext: enc.Ciphertext, AAD: "org-a-aad", KeyVersionID: enc.KeyVersionID,
+		})
+		if resp != nil {
+			t.Fatal("decrypted without a principal")
+		}
+		assertErrorKind(t, err, ErrorUnauthenticated)
+	})
+
+	t.Run("batch_encrypt", func(t *testing.T) {
+		resp, err := svc.BatchEncrypt(anon, &BatchEncryptRequest{
+			TenantID: "org-a", ScopeID: "app-a",
+			Items: []BatchEncryptItem{{Plaintext: []byte("x"), AAD: "org-a-aad"}},
+		})
+		if resp != nil {
+			t.Fatal("batch encrypted without a principal")
+		}
+		assertErrorKind(t, err, ErrorUnauthenticated)
+	})
+
+	t.Run("batch_decrypt", func(t *testing.T) {
+		resp, err := svc.BatchDecrypt(anon, &BatchDecryptRequest{
+			TenantID: "org-a",
+			ScopeID:  "app-a",
+			Items: []DecryptRequest{{
+				Ciphertext: batch.Items[0].Ciphertext, AAD: "batch-aad", KeyVersionID: batch.Items[0].KeyVersionID,
+			}},
+		})
+		if resp != nil {
+			t.Fatal("batch decrypted without a principal")
+		}
+		assertErrorKind(t, err, ErrorUnauthenticated)
+	})
+
+	t.Run("create_data_key", func(t *testing.T) {
+		resp, err := keySvc.CreateDataKey(anon, &CreateDataKeyRequest{TenantID: "org-a", ScopeID: "keys"})
+		if resp != nil {
+			t.Fatal("created a data key without a principal")
+		}
+		assertErrorKind(t, err, ErrorUnauthenticated)
+	})
+
+	t.Run("rotate_data_key", func(t *testing.T) {
+		resp, err := keySvc.RotateDataKey(anon, &RotateDataKeyRequest{TenantID: "org-a", ScopeID: "app-a"})
+		if resp != nil {
+			t.Fatal("rotated a data key without a principal")
+		}
+		assertErrorKind(t, err, ErrorUnauthenticated)
+	})
+}
+
+func TestKMSService_OrgAPrincipalCannotOperateOnOrgB(t *testing.T) {
+	_, _, dekMgr, dekStore, auditLogger, _, err := testutil.SetupTestKMSStack(testutil.TestRootKeyHex)
+	if err != nil {
+		t.Fatalf("SetupTestKMSStack: %v", err)
+	}
+	svc := NewKMSService(dekMgr, auditLogger)
+	keySvc := NewKeyService(dekMgr, keys.NewKeyVersionManager(dekStore, 1000), auditLogger)
+	orgA := ctxForTenant("org-a")
+	orgB := ctxForTenant("org-b")
+
+	enc, err := svc.Encrypt(orgA, &EncryptRequest{
+		TenantID: "org-a", ScopeID: "app-a", Plaintext: []byte("org-a-plaintext"), AAD: "org-a-aad",
+	})
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	batch, err := svc.BatchEncrypt(orgA, &BatchEncryptRequest{
+		TenantID: "org-a",
+		ScopeID:  "app-a",
+		Items:    []BatchEncryptItem{{Plaintext: []byte("batch-plaintext"), AAD: "batch-aad"}},
+	})
+	if err != nil {
+		t.Fatalf("BatchEncrypt: %v", err)
+	}
+
+	t.Run("encrypt", func(t *testing.T) {
+		resp, err := svc.Encrypt(orgA, &EncryptRequest{
+			TenantID: "org-b", ScopeID: "app-b", Plaintext: []byte("other-org"), AAD: "org-b-aad",
+		})
+		if resp != nil {
+			t.Fatal("org A principal encrypted for org B")
+		}
+		assertErrorKind(t, err, ErrorPermissionDenied)
+		rec, err := dekStore.GetActiveKeyVersion(context.Background(), "org-b", "app-b")
+		if err != nil {
+			t.Fatalf("GetActiveKeyVersion: %v", err)
+		}
+		if rec != nil {
+			t.Fatal("request tenant was used to create a data key")
+		}
+	})
+
+	t.Run("decrypt", func(t *testing.T) {
+		resp, err := svc.Decrypt(orgB, &DecryptRequest{
+			TenantID: "org-a", ScopeID: "app-a",
+			Ciphertext: enc.Ciphertext, AAD: "org-a-aad", KeyVersionID: enc.KeyVersionID,
+		})
+		if resp != nil {
+			t.Fatal("org B principal decrypted org A ciphertext")
+		}
+		assertErrorKind(t, err, ErrorPermissionDenied)
+
+		resp, err = svc.Decrypt(orgA, &DecryptRequest{
+			TenantID: "org-b", ScopeID: "app-a",
+			Ciphertext: enc.Ciphertext, AAD: "org-a-aad", KeyVersionID: enc.KeyVersionID,
+		})
+		if resp != nil {
+			t.Fatal("org A principal decrypted by naming org B")
+		}
+		assertErrorKind(t, err, ErrorPermissionDenied)
+
+		okResp, err := svc.Decrypt(orgA, &DecryptRequest{
+			TenantID: "org-a", ScopeID: "app-a",
+			Ciphertext: enc.Ciphertext, AAD: "org-a-aad", KeyVersionID: enc.KeyVersionID,
+		})
+		if err != nil {
+			t.Fatalf("owner decrypt: %v", err)
+		}
+		if string(okResp.Plaintext) != "org-a-plaintext" {
+			t.Fatal("owner decrypt did not return the original plaintext")
+		}
+	})
+
+	t.Run("batch_encrypt", func(t *testing.T) {
+		resp, err := svc.BatchEncrypt(orgA, &BatchEncryptRequest{
+			TenantID: "org-b", ScopeID: "batch-b",
+			Items: []BatchEncryptItem{{Plaintext: []byte("x"), AAD: "b"}},
+		})
+		if resp != nil {
+			t.Fatal("org A principal batch encrypted for org B")
+		}
+		assertErrorKind(t, err, ErrorPermissionDenied)
+	})
+
+	t.Run("batch_decrypt", func(t *testing.T) {
+		resp, err := svc.BatchDecrypt(orgB, &BatchDecryptRequest{
+			TenantID: "org-a",
+			ScopeID:  "app-a",
+			Items: []DecryptRequest{{
+				Ciphertext: batch.Items[0].Ciphertext, AAD: "batch-aad", KeyVersionID: batch.Items[0].KeyVersionID,
+			}},
+		})
+		if resp != nil {
+			t.Fatal("org B principal batch decrypted org A ciphertext")
+		}
+		assertErrorKind(t, err, ErrorPermissionDenied)
+	})
+
+	t.Run("create_data_key", func(t *testing.T) {
+		resp, err := keySvc.CreateDataKey(orgA, &CreateDataKeyRequest{TenantID: "org-b", ScopeID: "keys"})
+		if resp != nil {
+			t.Fatal("org A principal created a data key for org B")
+		}
+		assertErrorKind(t, err, ErrorPermissionDenied)
+	})
+
+	t.Run("rotate_data_key", func(t *testing.T) {
+		resp, err := keySvc.RotateDataKey(orgA, &RotateDataKeyRequest{TenantID: "org-b", ScopeID: "app-a"})
+		if resp != nil {
+			t.Fatal("org A principal rotated a data key for org B")
+		}
+		assertErrorKind(t, err, ErrorPermissionDenied)
+	})
+}
+
+func TestKMSService_AuditActorEqualsSessionPrincipal(t *testing.T) {
+	_, _, dekMgr, dekStore, auditLogger, auditStore, err := testutil.SetupTestKMSStack(testutil.TestRootKeyHex)
+	if err != nil {
+		t.Fatalf("SetupTestKMSStack: %v", err)
+	}
+	svc := NewKMSService(dekMgr, auditLogger)
+	keySvc := NewKeyService(dekMgr, keys.NewKeyVersionManager(dekStore, 1000), auditLogger)
+
+	const sessionPrincipal = "session-principal"
+	ctx := authn.WithPrincipal(context.Background(), authn.Principal{
+		TenantID: "org-a",
+		ActorID:  sessionPrincipal,
+	})
+
+	enc, err := svc.Encrypt(ctx, &EncryptRequest{
+		TenantID: "org-a", ScopeID: "app-a", Plaintext: []byte("audit-plaintext"), AAD: "audit-aad",
+	})
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	if _, err := svc.Decrypt(ctx, &DecryptRequest{
+		TenantID: "org-a", ScopeID: "app-a",
+		Ciphertext: enc.Ciphertext, AAD: "audit-aad", KeyVersionID: enc.KeyVersionID,
+	}); err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+
+	batch, err := svc.BatchEncrypt(ctx, &BatchEncryptRequest{
+		TenantID: "org-a",
+		ScopeID:  "app-a",
+		Items:    []BatchEncryptItem{{Plaintext: []byte("batch"), AAD: "batch-aad"}},
+	})
+	if err != nil {
+		t.Fatalf("BatchEncrypt: %v", err)
+	}
+	if _, err := svc.BatchDecrypt(ctx, &BatchDecryptRequest{
+		TenantID: "org-a",
+		ScopeID:  "app-a",
+		Items: []DecryptRequest{{
+			Ciphertext: batch.Items[0].Ciphertext, AAD: "batch-aad", KeyVersionID: batch.Items[0].KeyVersionID,
+		}},
+	}); err != nil {
+		t.Fatalf("BatchDecrypt: %v", err)
+	}
+	if _, err := keySvc.CreateDataKey(ctx, &CreateDataKeyRequest{TenantID: "org-a", ScopeID: "key-scope"}); err != nil {
+		t.Fatalf("CreateDataKey: %v", err)
+	}
+	if _, err := keySvc.RotateDataKey(ctx, &RotateDataKeyRequest{TenantID: "org-a", ScopeID: "key-scope"}); err != nil {
+		t.Fatalf("RotateDataKey: %v", err)
+	}
+
+	entries, err := auditStore.GetEntries(ctx, "org-a", 50, 0)
+	if err != nil {
+		t.Fatalf("GetEntries: %v", err)
+	}
+	want := map[string]bool{
+		"decrypt":          false,
+		"batch_decrypt":    false,
+		"data_key_created": false,
+		"data_key_rotated": false,
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected audit entries for the session principal")
+	}
+	for _, entry := range entries {
+		if entry.ActorID != sessionPrincipal {
+			t.Fatalf("action %s actor = %q, want session principal %q", entry.Action, entry.ActorID, sessionPrincipal)
+		}
+		want[entry.Action] = true
+	}
+	for action, found := range want {
+		if !found {
+			t.Errorf("missing audit action %s recorded as the session principal", action)
+		}
 	}
 }
