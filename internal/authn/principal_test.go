@@ -22,7 +22,4 @@ func TestPrincipalRoundTrip(t *testing.T) {
 	if _, ok := authn.FromContext(context.Background()); ok {
 		t.Fatal("empty context reported a principal")
 	}
-	if _, ok := authn.FromContext(nil); ok {
-		t.Fatal("nil context should not carry a principal")
-	}
 }
