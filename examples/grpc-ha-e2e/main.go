@@ -115,6 +115,13 @@ func verifyVaultSessionAcrossReplicas(ctx context.Context, first, second grpc.Cl
 		log.Fatalf("validate session on replica 2: %v", err)
 	}
 
+	if _, err := pkiFirst.RevokeCert(authorized, &pb.RevokeCertRequest{SerialHex: member.SerialHex, OrgId: orgID}); err != nil {
+		log.Fatalf("revoke member cert: %v", err)
+	}
+	if _, err := sessionproof.Mint(ctx, sessions, member.CertPem, member.KeyPem, member.SerialHex, []string{"vault:read"}); err == nil {
+		log.Fatal("session minted for revoked member cert")
+	}
+
 	if _, err := sessions.RevokeSession(authorized, &pb.RevokeSessionRequest{SessionToken: token}); err != nil {
 		log.Fatalf("revoke session on replica 1: %v", err)
 	}
@@ -124,13 +131,6 @@ func verifyVaultSessionAcrossReplicas(ctx context.Context, first, second grpc.Cl
 		log.Fatal("vault read after revoke succeeded on replica 2")
 	} else if status.Code(err) != codes.Unauthenticated && status.Code(err) != codes.PermissionDenied {
 		log.Fatalf("vault read after revoke: %v", err)
-	}
-
-	if _, err := pkiFirst.RevokeCert(authorized, &pb.RevokeCertRequest{SerialHex: member.SerialHex, OrgId: orgID}); err != nil {
-		log.Fatalf("revoke member cert: %v", err)
-	}
-	if _, err := sessionproof.Mint(ctx, sessions, member.CertPem, member.KeyPem, member.SerialHex, []string{"vault:read"}); err == nil {
-		log.Fatal("session minted for revoked member cert")
 	}
 }
 
