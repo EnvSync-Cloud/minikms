@@ -26,6 +26,7 @@ import (
 	"github.com/envsync-cloud/minikms/internal/crypto"
 	"github.com/envsync-cloud/minikms/internal/escrow"
 	grpcadapter "github.com/envsync-cloud/minikms/internal/grpc"
+	"github.com/envsync-cloud/minikms/internal/intercept"
 	"github.com/envsync-cloud/minikms/internal/keys"
 	"github.com/envsync-cloud/minikms/internal/pki"
 	"github.com/envsync-cloud/minikms/internal/ratelimit"
@@ -136,8 +137,8 @@ func main() {
 		log.Printf("Root escrow ready (set: %s, newly created: %t)", rootSet.ID, created)
 	}
 
-	// Initialize rate limiter
-	_ = ratelimit.NewRateLimiter(redisStore.Client(), cfg.RateLimitPerSecond, cfg.RateLimitBurst)
+	// Initialize rate limiter. The gRPC interceptor chain calls Allow.
+	limiter := ratelimit.NewRateLimiter(redisStore.Client(), cfg.RateLimitPerSecond, cfg.RateLimitBurst)
 
 	// Load the shared PKI root CA. Generating it in-process would give every
 	// replica a different trust root and invalidate rolling deployments.
@@ -211,6 +212,7 @@ func main() {
 	} else {
 		log.Printf("WARNING: serving without TLS because MINIKMS_ALLOW_INSECURE=true (local development only)")
 	}
+	opts = append(opts, intercept.ServerOptions(auth.NewJWTValidator(pgStore), limiter)...)
 
 	grpcServer := grpc.NewServer(opts...)
 
