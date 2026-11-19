@@ -463,6 +463,19 @@ func GenerateNonce() ([]byte, error) {
 	return nonce, nil
 }
 
+// IssueBootstrapSession issues a session for a managed member whose private key
+// stays on the server. It is not exposed as an RPC.
+func (s *SessionService) IssueBootstrapSession(ctx context.Context, memberID, orgID, role, certSerial string) (string, error) {
+	if memberID == "" || orgID == "" || role == "" || certSerial == "" {
+		return "", invalidArgument("bootstrap session fields are required")
+	}
+	resp, err := s.issueSessionToken(ctx, memberID, orgID, role, certSerial, s.resolveScopes(nil, role))
+	if err != nil {
+		return "", err
+	}
+	return resp.SessionToken, nil
+}
+
 // issueSessionToken creates and stores a JWT session token.
 func (s *SessionService) issueSessionToken(ctx context.Context, memberID, orgID, role, certSerial string, scopes []string) (*CreateSessionResponse, error) {
 	// Check session count limit

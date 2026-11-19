@@ -10,6 +10,9 @@ import (
 	"fmt"
 
 	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
+	"github.com/envsync-cloud/minikms/internal/grpc"
+	ggrpc "google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
 
 func ParseMemberKey(keyPEM string) (*ecdsa.PrivateKey, error) {
@@ -34,6 +37,29 @@ func ParseMemberKey(keyPEM string) (*ecdsa.PrivateKey, error) {
 func SignNonce(key *ecdsa.PrivateKey, nonce []byte) ([]byte, error) {
 	hash := sha256.Sum256(nonce)
 	return ecdsa.SignASN1(rand.Reader, key, hash[:])
+}
+
+// OpenOrgSession creates an organization and returns the one-time admin session.
+// The managed member private key stays on the server.
+func OpenOrgSession(ctx context.Context, pki pb.PKIServiceClient, orgID, orgName string) (token, memberSerial string, err error) {
+	var hdr metadata.MD
+	if _, err = pki.CreateOrgCA(ctx, &pb.CreateOrgCARequest{OrgId: orgID, OrgName: orgName}, ggrpc.Header(&hdr)); err != nil {
+		return "", "", err
+	}
+	token = headerFirst(hdr, grpc.BootstrapSessionHeader)
+	memberSerial = headerFirst(hdr, grpc.BootstrapMemberSerialHeader)
+	if token == "" || memberSerial == "" {
+		return "", "", fmt.Errorf("organization bootstrap did not open a session")
+	}
+	return token, memberSerial, nil
+}
+
+func headerFirst(md metadata.MD, key string) string {
+	vals := md.Get(key)
+	if len(vals) == 0 {
+		return ""
+	}
+	return vals[0]
 }
 
 func Mint(ctx context.Context, sessions pb.SessionServiceClient, certPEM, keyPEM, serial string, scopes []string) (string, error) {

@@ -195,6 +195,11 @@ func main() {
 	// Create gRPC adapters
 	kmsAdapter := grpcadapter.NewKMSAdapter(kmsSvc, keySvc)
 	pkiAdapter := grpcadapter.NewPKIAdapter(pkiSvc)
+	// Local dev has no client-held member key. A new org gets one admin session;
+	// the managed private key stays in the certificate store.
+	if cfg.AllowInsecure {
+		pkiAdapter.SetBootstrapSessionIssuer(sessionSvc)
+	}
 	auditAdapter := grpcadapter.NewAuditAdapter(auditSvc)
 	vaultAdapter := grpcadapter.NewVaultAdapter(vaultSvc)
 	sessionAdapter := grpcadapter.NewSessionAdapter(sessionSvc)

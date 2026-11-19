@@ -70,10 +70,9 @@ func isPreAuth(fullMethod string) bool {
 		pb.SessionService_IssueSessionChallenge_FullMethodName,
 		// CreateSession is the proto RPC that performs CreateSessionByCert.
 		pb.SessionService_CreateSession_FullMethodName,
-		// The first member certificate is what CreateSession checks. These two
-		// calls cannot present a session that does not exist yet.
-		pb.PKIService_CreateOrgCA_FullMethodName,
-		pb.PKIService_IssueMemberCert_FullMethodName:
+		// CreateOrgCA bootstraps an organization before any member session exists.
+		// IssueMemberCert, RevokeCert, and InstallOrgCA stay authenticated.
+		pb.PKIService_CreateOrgCA_FullMethodName:
 		return true
 	default:
 		return false

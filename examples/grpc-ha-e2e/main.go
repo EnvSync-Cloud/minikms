@@ -71,25 +71,23 @@ func verifyVaultSessionAcrossReplicas(ctx context.Context, first, second grpc.Cl
 
 	pkiFirst := pb.NewPKIServiceClient(first)
 	pkiSecond := pb.NewPKIServiceClient(second)
-	if _, err := pkiFirst.CreateOrgCA(ctx, &pb.CreateOrgCARequest{
-		OrgId: orgID, OrgName: "HA Vault Organization",
-	}); err != nil {
+	token, _, err := sessionproof.OpenOrgSession(ctx, pkiFirst, orgID, "HA Vault Organization")
+	if err != nil {
 		log.Fatalf("create Org CA through replica 1: %v", err)
 	}
-	member, err := pkiSecond.IssueMemberCert(ctx, &pb.IssueMemberCertRequest{
+	authorized := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+	member, err := pkiSecond.IssueMemberCert(authorized, &pb.IssueMemberCertRequest{
 		MemberId: memberID, MemberEmail: "ha-vault@example.com", OrgId: orgID, Role: "admin",
 	})
 	if err != nil {
 		log.Fatalf("issue member certificate through replica 2: %v", err)
 	}
-
-	sessions := pb.NewSessionServiceClient(first)
-	token, err := sessionproof.Mint(ctx, sessions, member.CertPem, member.KeyPem, member.SerialHex, []string{"vault:read", "vault:write"})
-	if err != nil {
-		log.Fatalf("create session through replica 1: %v", err)
+	if member.KeyPem != "" || member.CertPem == "" || member.SerialHex == "" {
+		log.Fatal("managed member issuance did not keep the private key server-side")
 	}
 
-	authorized := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+	sessions := pb.NewSessionServiceClient(first)
+
 	layerOne := []byte("layer-one-client-ciphertext")
 	vaultFirst := pb.NewVaultServiceClient(first)
 	vaultSecond := pb.NewVaultServiceClient(second)
@@ -118,8 +116,8 @@ func verifyVaultSessionAcrossReplicas(ctx context.Context, first, second grpc.Cl
 	if _, err := pkiFirst.RevokeCert(authorized, &pb.RevokeCertRequest{SerialHex: member.SerialHex, OrgId: orgID}); err != nil {
 		log.Fatalf("revoke member cert: %v", err)
 	}
-	if _, err := sessionproof.Mint(ctx, sessions, member.CertPem, member.KeyPem, member.SerialHex, []string{"vault:read"}); err == nil {
-		log.Fatal("session minted for revoked member cert")
+	if _, err := sessions.IssueSessionChallenge(ctx, &pb.IssueSessionChallengeRequest{CertSerial: member.SerialHex}); err == nil {
+		log.Fatal("challenge issued for revoked member cert")
 	}
 
 	if _, err := sessions.RevokeSession(authorized, &pb.RevokeSessionRequest{SessionToken: token}); err != nil {
@@ -134,20 +132,10 @@ func verifyVaultSessionAcrossReplicas(ctx context.Context, first, second grpc.Cl
 	}
 }
 
-func memberSession(ctx context.Context, conn grpc.ClientConnInterface, orgID, memberID, email string, scopes []string) context.Context {
-	pkiClient := pb.NewPKIServiceClient(conn)
-	if _, err := pkiClient.CreateOrgCA(ctx, &pb.CreateOrgCARequest{OrgId: orgID, OrgName: orgID}); err != nil {
+func memberSession(ctx context.Context, conn grpc.ClientConnInterface, orgID, _, _ string, _ []string) context.Context {
+	token, _, err := sessionproof.OpenOrgSession(ctx, pb.NewPKIServiceClient(conn), orgID, orgID)
+	if err != nil {
 		log.Fatalf("create Org CA: %v", err)
-	}
-	member, err := pkiClient.IssueMemberCert(ctx, &pb.IssueMemberCertRequest{
-		MemberId: memberID, MemberEmail: email, OrgId: orgID, Role: "admin",
-	})
-	if err != nil {
-		log.Fatalf("issue member certificate: %v", err)
-	}
-	token, err := sessionproof.Mint(ctx, pb.NewSessionServiceClient(conn), member.CertPem, member.KeyPem, member.SerialHex, scopes)
-	if err != nil {
-		log.Fatalf("create session: %v", err)
 	}
 	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 }

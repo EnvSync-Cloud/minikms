@@ -245,6 +245,35 @@ func mintTestSession(t *testing.T, svc *SessionService, key *ecdsa.PrivateKey, c
 	return resp
 }
 
+func TestIssueBootstrapSession_AdminRole(t *testing.T) {
+	svc, _, certStore, _ := setupTestSessionService(t)
+	if err := certStore.StoreCertificate(context.Background(), &pkistore.CertRecord{
+		SerialNumber: "abc123",
+		CertType:     "member",
+		OrgID:        "org-1",
+		Status:       "active",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	token, err := svc.IssueBootstrapSession(context.Background(), "member-1", "org-1", "admin", "abc123")
+	if err != nil {
+		t.Fatalf("IssueBootstrapSession: %v", err)
+	}
+	resp, err := svc.ValidateSession(context.Background(), &ValidateSessionRequest{SessionToken: token})
+	if err != nil {
+		t.Fatalf("ValidateSession: %v", err)
+	}
+	if !resp.Valid || resp.Role != "admin" || resp.OrgID != "org-1" || resp.MemberID != "member-1" || resp.CertSerial != "abc123" {
+		t.Fatalf("session = %+v", resp)
+	}
+	for _, scope := range []string{"vault:read", "vault:write", "pki:issue"} {
+		if !HasScope(resp, scope) {
+			t.Fatalf("missing scope %s in %v", scope, resp.Scopes)
+		}
+	}
+}
+
 func setupTestSessionService(t *testing.T) (*SessionService, *mockTokenRegistry, *mockCertStore, *mockPolicyStore) {
 	t.Helper()
 	signingKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
