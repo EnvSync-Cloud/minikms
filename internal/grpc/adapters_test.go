@@ -503,7 +503,6 @@ func TestPKIAdapter_IssueMemberCert(t *testing.T) {
 }
 
 func TestPKIAdapter_IssueMemberCertAcrossReplicas(t *testing.T) {
-	ctx := context.Background()
 	certStore := testutil.NewMockPKICertStore()
 	rootCert, rootKey, err := generateTestRootCA()
 	if err != nil {
@@ -523,7 +522,7 @@ func TestPKIAdapter_IssueMemberCertAcrossReplicas(t *testing.T) {
 
 	first := newReplica()
 	second := newReplica()
-	ctx = pkiPrincipal("org-ha-adapter", "admin")
+	ctx := pkiPrincipal("org-ha-adapter", "admin")
 	if _, err := first.CreateOrgCA(ctx, &pb.CreateOrgCARequest{
 		OrgId: "org-ha-adapter", OrgName: "HA Adapter Org",
 	}); err != nil {
