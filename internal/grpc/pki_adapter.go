@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	// BootstrapSessionHeader is the one-time admin session for a newly created
+	// BootstrapSessionHeader is the admin session minted by CreateOrgCA.
 	// organization. Managed member keys are not returned to the client.
 	BootstrapSessionHeader = "x-minikms-bootstrap-session"
 	// BootstrapMemberSerialHeader is that admin certificate's serial.
@@ -68,7 +68,7 @@ func (a *PKIAdapter) bootstrapNewOrg(ctx context.Context, req *pb.CreateOrgCAReq
 	if req == nil {
 		req = &pb.CreateOrgCARequest{}
 	}
-	resp, cert, key, created, err := a.pkiSvc.CreateOrgCAFull(ctx, &service.CreateOrgCARequest{
+	resp, cert, key, _, err := a.pkiSvc.CreateOrgCAFull(ctx, &service.CreateOrgCARequest{
 		OrgID:   req.OrgId,
 		OrgName: req.OrgName,
 	})
@@ -76,7 +76,10 @@ func (a *PKIAdapter) bootstrapNewOrg(ctx context.Context, req *pb.CreateOrgCAReq
 		return nil, "", "", toStatusError(err)
 	}
 	out := &pb.CreateOrgCAResponse{CertPem: resp.CertPEM, SerialHex: resp.SerialHex}
-	if !created || a.bootstrap == nil {
+	// Existing organizations still need an admin session. The first CreateOrgCA
+	// is the only time one was minted, and the API cannot decrypt the stored
+	// member key until it has that session.
+	if a.bootstrap == nil || cert == nil || key == nil {
 		return out, "", "", nil
 	}
 
