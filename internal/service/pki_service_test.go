@@ -9,6 +9,9 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
+	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,7 +96,7 @@ func TestPKIService_OrgBootstrapEscrowRecovery(t *testing.T) {
 	svc.SetOrgKeyManager(testOrgKeyManager(t))
 	svc.SetShamirConfig(5, 3)
 	svc.SetEscrowManager(escrowManager, custodians)
-	_, _, orgCAKey, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{OrgID: "org-escrow", OrgName: "Escrow Org"})
+	_, _, orgCAKey, _, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{OrgID: "org-escrow", OrgName: "Escrow Org"})
 	if err != nil {
 		t.Fatalf("CreateOrgCAFull: %v", err)
 	}
@@ -292,7 +295,7 @@ func TestRevokeCert(t *testing.T) {
 	ctx := context.Background()
 
 	// Create org CA
-	_, orgCACert, orgCAKey, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+	_, orgCACert, orgCAKey, _, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
 		OrgID: "org-001", OrgName: "Test Org",
 	})
 	if err != nil {
@@ -345,7 +348,7 @@ func TestRevokeCert_WrongOrg(t *testing.T) {
 	svc, _, _, _ := setupPKIWithStore(t)
 	ctx := context.Background()
 
-	_, orgCACert, orgCAKey, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+	_, orgCACert, orgCAKey, _, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
 		OrgID: "org-001", OrgName: "Test Org",
 	})
 	memberResp, _ := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
@@ -374,7 +377,7 @@ func TestGetCRL(t *testing.T) {
 	svc, _, _, _ := setupPKIWithStore(t)
 	ctx := context.Background()
 
-	_, orgCACert, orgCAKey, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+	_, orgCACert, orgCAKey, _, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
 		OrgID: "org-001", OrgName: "Test Org",
 	})
 	memberResp, _ := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
@@ -423,7 +426,7 @@ func TestCheckOCSP_Good(t *testing.T) {
 	svc, _, _, _ := setupPKIWithStore(t)
 	ctx := context.Background()
 
-	_, orgCACert, orgCAKey, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+	_, orgCACert, orgCAKey, _, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
 		OrgID: "org-001", OrgName: "Test Org",
 	})
 	memberResp, _ := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
@@ -446,7 +449,7 @@ func TestCheckOCSP_Revoked(t *testing.T) {
 	svc, _, _, _ := setupPKIWithStore(t)
 	ctx := context.Background()
 
-	_, orgCACert, orgCAKey, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+	_, orgCACert, orgCAKey, _, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
 		OrgID: "org-001", OrgName: "Test Org",
 	})
 	memberResp, _ := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
@@ -488,7 +491,7 @@ func TestCheckOCSP_WrongOrg(t *testing.T) {
 	svc, _, _, _ := setupPKIWithStore(t)
 	ctx := context.Background()
 
-	_, orgCACert, orgCAKey, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+	_, orgCACert, orgCAKey, _, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
 		OrgID: "org-001", OrgName: "Test Org",
 	})
 	memberResp, _ := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
@@ -560,7 +563,7 @@ func TestIssueMemberCert_WithStore(t *testing.T) {
 	svc, _, _, certStore := setupPKIWithStore(t)
 	ctx := context.Background()
 
-	_, orgCACert, orgCAKey, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+	_, orgCACert, orgCAKey, _, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
 		OrgID: "org-001", OrgName: "Test Org",
 	})
 
@@ -589,7 +592,7 @@ func TestIssueLeafCert_WithStore(t *testing.T) {
 	svc, _, _, certStore := setupPKIWithStore(t)
 	ctx := context.Background()
 
-	_, orgCACert, orgCAKey, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+	_, orgCACert, orgCAKey, _, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
 		OrgID: "org-leaf", OrgName: "Leaf Org",
 	})
 	if err != nil {
@@ -625,7 +628,7 @@ func TestSignCSR_WithStore(t *testing.T) {
 	svc, _, _, certStore := setupPKIWithStore(t)
 	ctx := context.Background()
 
-	_, orgCACert, orgCAKey, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+	_, orgCACert, orgCAKey, _, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
 		OrgID: "org-csr", OrgName: "CSR Org",
 	})
 	if err != nil {
@@ -669,7 +672,7 @@ func TestIssueMemberCert_StoresPrivateKey(t *testing.T) {
 	svc, _, _, certStore := setupPKIWithStore(t)
 	ctx := context.Background()
 
-	_, orgCACert, orgCAKey, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+	_, orgCACert, orgCAKey, _, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
 		OrgID: "org-privkey", OrgName: "PrivKey Test Org",
 	})
 
@@ -695,7 +698,7 @@ func TestIssueMemberCert_PrivateKeyRoundtrip(t *testing.T) {
 	svc, _, _, _ := setupPKIWithStore(t)
 	ctx := context.Background()
 
-	_, orgCACert, orgCAKey, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+	_, orgCACert, orgCAKey, _, _ := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
 		OrgID: "org-roundtrip", OrgName: "Roundtrip Test Org",
 	})
 
@@ -767,7 +770,7 @@ func TestCreateOrgCAFull_Stored(t *testing.T) {
 	svc, _, _, certStore := setupPKIWithStore(t)
 	ctx := context.Background()
 
-	resp, cert, key, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+	resp, cert, key, _, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
 		OrgID: "org-001", OrgName: "Test Org",
 	})
 	if err != nil {
@@ -804,20 +807,26 @@ func TestCreateOrgCAFull_SharedAcrossReplicas(t *testing.T) {
 	ctx := context.Background()
 	first, rootCert, rootKey, certStore := setupPKIWithStore(t)
 
-	created, _, createdKey, err := first.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+	created, _, createdKey, fresh, err := first.CreateOrgCAFull(ctx, &CreateOrgCARequest{
 		OrgID: "org-ha", OrgName: "HA Organization",
 	})
 	if err != nil {
 		t.Fatalf("first CreateOrgCAFull: %v", err)
 	}
+	if !fresh {
+		t.Fatal("first CreateOrgCAFull did not report a new organization CA")
+	}
 
 	second := NewPKIService(rootCert, rootKey, audit.NewAuditLogger(testutil.NewMockAuditStore()), certStore)
 	second.SetOrgKeyManager(testOrgKeyManager(t))
-	loaded, loadedCert, loadedKey, err := second.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+	loaded, loadedCert, loadedKey, fresh, err := second.CreateOrgCAFull(ctx, &CreateOrgCARequest{
 		OrgID: "org-ha", OrgName: "HA Organization",
 	})
 	if err != nil {
 		t.Fatalf("second CreateOrgCAFull: %v", err)
+	}
+	if fresh {
+		t.Fatal("existing organization CA was reported as newly created")
 	}
 	if loaded.SerialHex != created.SerialHex {
 		t.Fatalf("replica created a different Org CA: got %s want %s", loaded.SerialHex, created.SerialHex)
@@ -825,4 +834,132 @@ func TestCreateOrgCAFull_SharedAcrossReplicas(t *testing.T) {
 	if loadedCert.SerialNumber.Text(16) != created.SerialHex || loadedKey.D.Cmp(createdKey.D) != 0 {
 		t.Fatal("replica did not load the shared Org CA certificate and key")
 	}
+}
+
+func TestCreateOrgCACSR_ShortOrgIDDoesNotPanic(t *testing.T) {
+	svc, _, _, store := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	for _, orgID := range []string{"a", "1234567"} {
+		t.Run(orgID, func(t *testing.T) {
+			csr, err := svc.CreateOrgCACSR(ctx, orgID, "Short Org")
+			if csr != "" {
+				t.Fatalf("CreateOrgCACSR(%q) csr = %q, want empty", orgID, csr)
+			}
+			assertErrorKind(t, err, ErrorInvalidArgument)
+			pending, pendErr := store.GetPendingOrgCA(ctx, orgID)
+			if pendErr != nil {
+				t.Fatalf("GetPendingOrgCA: %v", pendErr)
+			}
+			if pending != nil {
+				t.Fatalf("short org id %q stored a pending CA", orgID)
+			}
+		})
+	}
+
+	// Eight characters is the first length that can be sliced.
+	const orgID = "orgid123"
+	csr, err := svc.CreateOrgCACSR(ctx, orgID, "Eight Org")
+	if err != nil {
+		t.Fatalf("CreateOrgCACSR(%q): %v", orgID, err)
+	}
+	if block, _ := pem.Decode([]byte(csr)); block == nil {
+		t.Fatal("expected a CSR PEM for an 8-character org id")
+	}
+	pending, err := store.GetPendingOrgCA(ctx, orgID)
+	if err != nil {
+		t.Fatalf("GetPendingOrgCA: %v", err)
+	}
+	if pending == nil || pending.SerialNumber != "pending-"+orgID {
+		t.Fatalf("serial = %+v, want pending-%s", pending, orgID)
+	}
+
+	longID := orgID + "xyz"
+	if _, err := svc.CreateOrgCACSR(ctx, longID, "Long Org"); err != nil {
+		t.Fatalf("CreateOrgCACSR(%q): %v", longID, err)
+	}
+	pending, err = store.GetPendingOrgCA(ctx, longID)
+	if err != nil {
+		t.Fatalf("GetPendingOrgCA: %v", err)
+	}
+	if pending == nil || pending.SerialNumber != "pending-"+orgID {
+		t.Fatalf("serial = %+v, want pending-%s", pending, orgID)
+	}
+}
+
+func TestInstallOrgCA_RejectsChainNotUnderPlatformRoot(t *testing.T) {
+	svc, rootCert, rootKey, store := setupPKIWithStore(t)
+	ctx := context.Background()
+
+	const foreignOrg = "org-install-foreign"
+	csr, err := svc.CreateOrgCACSR(ctx, foreignOrg, "Foreign Org")
+	if err != nil {
+		t.Fatalf("CreateOrgCACSR: %v", err)
+	}
+	foreignCert, foreignKey, _, err := pkiPkg.CreateRootCA("Foreign Root", 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := signOrgCACSR(t, csr, foreignCert, foreignKey)
+	chain := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: foreignCert.Raw})
+	_, err = svc.InstallOrgCA(ctx, foreignOrg, certPEM, string(chain))
+	var domain *DomainError
+	if !errors.As(err, &domain) || domain.Kind != ErrorInvalidArgument || !strings.Contains(domain.PublicMessage, "platform root") {
+		t.Fatalf("foreign chain error = %v", err)
+	}
+	pending, err := store.GetPendingOrgCA(ctx, foreignOrg)
+	if err != nil || pending == nil {
+		t.Fatal("rejected install consumed the pending organization CA")
+	}
+
+	const rootedOrg = "org-install-rooted"
+	csr, err = svc.CreateOrgCACSR(ctx, rootedOrg, "Rooted Org")
+	if err != nil {
+		t.Fatalf("CreateOrgCACSR rooted: %v", err)
+	}
+	resp, err := svc.InstallOrgCA(ctx, rootedOrg, signOrgCACSR(t, csr, rootCert, rootKey), "")
+	if err != nil {
+		t.Fatalf("platform-rooted InstallOrgCA: %v", err)
+	}
+	if resp.CertPEM == "" || resp.SerialHex == "" {
+		t.Fatal("rooted install returned an empty certificate")
+	}
+	rec, err := store.GetCertificateBySerial(ctx, resp.SerialHex)
+	if err != nil || rec == nil || rec.Status != "active" {
+		t.Fatalf("installed CA record = %+v err=%v", rec, err)
+	}
+}
+
+func signOrgCACSR(t *testing.T, csrPEM string, parent *x509.Certificate, parentKey *ecdsa.PrivateKey) string {
+	t.Helper()
+	block, _ := pem.Decode([]byte(csrPEM))
+	if block == nil {
+		t.Fatal("csr pem")
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	notBefore := parent.NotBefore
+	if notBefore.Before(time.Now().Add(-time.Minute)) {
+		notBefore = time.Now().Add(-time.Minute)
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               csr.Subject,
+		NotBefore:             notBefore,
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            1,
+	}, parent, csr.PublicKey, parentKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }

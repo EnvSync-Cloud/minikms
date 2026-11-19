@@ -2,14 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"log"
 	"os"
 	"time"
-
-	"crypto/rand"
-	"crypto/x509"
-	"encoding/pem"
 
 	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
 	"github.com/envsync-cloud/minikms/examples/internal/sessionproof"
@@ -46,13 +44,22 @@ func main() {
 	scopeID := "app-test-001"
 
 	fmt.Println("\n=== 2. Enroll a member and open a session ===")
-	if _, err = pkiClient.CreateOrgCA(ctx, &pb.CreateOrgCARequest{
-		OrgId:   tenantID,
-		OrgName: "Test Organization",
-	}); err != nil {
-		log.Fatalf("CreateOrgCA: %v", err)
+	if _, err = pkiClient.IssueMemberCert(ctx, &pb.IssueMemberCertRequest{
+		MemberId:    "user-001",
+		MemberEmail: "alice@example.com",
+		OrgId:       tenantID,
+		Role:        "admin",
+	}); status.Code(err) != codes.Unauthenticated {
+		log.Fatalf("unauthenticated IssueMemberCert: %v", err)
 	}
-	memberResp, err := pkiClient.IssueMemberCert(ctx, &pb.IssueMemberCertRequest{
+	fmt.Println("  unauthenticated IssueMemberCert rejected")
+
+	token, _, err := sessionproof.OpenOrgSession(ctx, pkiClient, tenantID, "Test Organization")
+	if err != nil {
+		log.Fatalf("open session: %v", err)
+	}
+	authCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+	memberResp, err := pkiClient.IssueMemberCert(authCtx, &pb.IssueMemberCertRequest{
 		MemberId:    "user-001",
 		MemberEmail: "alice@example.com",
 		OrgId:       tenantID,
@@ -61,11 +68,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("IssueMemberCert: %v", err)
 	}
-	token, err := sessionproof.Mint(ctx, sessions, memberResp.CertPem, memberResp.KeyPem, memberResp.SerialHex, []string{"vault:read", "vault:write"})
-	if err != nil {
-		log.Fatalf("Mint session: %v", err)
+	if memberResp.KeyPem != "" {
+		log.Fatal("managed member issuance returned a private key")
 	}
-	authCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+	if memberResp.CertPem == "" || memberResp.SerialHex == "" {
+		log.Fatal("managed member issuance did not return a certificate")
+	}
 	fmt.Printf("  Member cert serial: %s\n", memberResp.SerialHex)
 
 	// --- 3. CreateDataKey ---
@@ -273,39 +281,32 @@ func main() {
 	}
 	fmt.Println("  missing cert_auth rejected")
 
-	key, err := sessionproof.ParseMemberKey(memberResp.KeyPem)
-	if err != nil {
-		log.Fatal(err)
+	if _, err := sessions.IssueSessionChallenge(ctx, &pb.IssueSessionChallengeRequest{CertSerial: "does-not-exist"}); err == nil {
+		log.Fatal("challenge issued for an unknown certificate")
 	}
-	raw := make([]byte, 32)
-	_, _ = rand.Read(raw)
-	sig, err := sessionproof.SignNonce(key, raw)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if _, err := sessions.CreateSession(ctx, &pb.CreateSessionRequest{
-		CertAuth: &pb.CertAuth{CertPem: memberResp.CertPem, SignedNonce: sig, Nonce: raw},
-	}); err == nil {
-		log.Fatal("unissued nonce CreateSession succeeded")
-	}
-	fmt.Println("  unissued nonce rejected")
+	fmt.Println("  unknown certificate challenge rejected")
 
-	ch, err := sessions.IssueSessionChallenge(ctx, &pb.IssueSessionChallengeRequest{CertSerial: memberResp.SerialHex})
-	if err != nil {
-		log.Fatalf("challenge: %v", err)
+	if _, err := pkiClient.RevokeCert(authCtx, &pb.RevokeCertRequest{
+		SerialHex: memberResp.SerialHex, OrgId: tenantID, Reason: 1,
+	}); err != nil {
+		log.Fatalf("revoke member cert: %v", err)
 	}
-	replaySig, err := sessionproof.SignNonce(key, ch.Nonce)
-	if err != nil {
-		log.Fatal(err)
+	if _, err := sessions.IssueSessionChallenge(ctx, &pb.IssueSessionChallengeRequest{CertSerial: memberResp.SerialHex}); err == nil {
+		log.Fatal("challenge issued for a revoked certificate")
 	}
-	req := &pb.CreateSessionRequest{CertAuth: &pb.CertAuth{CertPem: memberResp.CertPem, SignedNonce: replaySig, Nonce: ch.Nonce}}
-	if _, err := sessions.CreateSession(ctx, req); err != nil {
-		log.Fatalf("first challenge CreateSession: %v", err)
+	fmt.Println("  revoked certificate challenge rejected")
+
+	if _, err := sessions.RevokeSession(authCtx, &pb.RevokeSessionRequest{SessionToken: token}); err != nil {
+		log.Fatalf("revoke session: %v", err)
 	}
-	if _, err := sessions.CreateSession(ctx, req); err == nil {
-		log.Fatal("replayed challenge succeeded")
+	if _, err := kms.Encrypt(authCtx, &pb.EncryptRequest{
+		TenantId: tenantID, ScopeId: scopeID, Plaintext: []byte("after-revoke"), Aad: "env:production",
+	}); err == nil {
+		log.Fatal("encrypt after session revoke succeeded")
+	} else if status.Code(err) != codes.Unauthenticated {
+		log.Fatalf("encrypt after session revoke: %v", err)
 	}
-	fmt.Println("  replay rejected")
+	fmt.Println("  revoked session rejected")
 
 	fmt.Println("\n=== All tests passed! ===")
 }

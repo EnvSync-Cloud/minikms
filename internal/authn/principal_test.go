@@ -8,7 +8,7 @@ import (
 )
 
 func TestPrincipalRoundTrip(t *testing.T) {
-	want := authn.Principal{TenantID: "org-1", ActorID: "member-1"}
+	want := authn.Principal{TenantID: "org-1", ActorID: "member-1", Role: "admin"}
 	ctx := authn.WithPrincipal(context.Background(), want)
 
 	got, ok := authn.FromContext(ctx)

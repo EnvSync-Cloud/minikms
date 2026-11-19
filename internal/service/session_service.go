@@ -1,10 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -23,8 +25,10 @@ import (
 // SessionPolicyStore defines the policy/token methods SessionService needs from the store.
 type SessionPolicyStore interface {
 	GetOrgSecurityPolicy(ctx context.Context, orgID string) (*store.OrgSecurityPolicy, error)
-	GetTokensBySubject(ctx context.Context, subjectHash string) ([]*auth.TokenEntry, error)
-	RevokeTokensBySubject(ctx context.Context, subjectHash string) (int, error)
+	// GetTokensBySubject returns unexpired tokens for subjectHash in orgID only.
+	GetTokensBySubject(ctx context.Context, orgID, subjectHash string) ([]*auth.TokenEntry, error)
+	// RevokeTokensBySubject revokes unexpired tokens for subjectHash in orgID only.
+	RevokeTokensBySubject(ctx context.Context, orgID, subjectHash string) (int, error)
 }
 
 // SessionService manages time-based session tokens tied to member certificates.
@@ -130,7 +134,7 @@ func (s *SessionService) CreateSessionByCert(ctx context.Context, req *CreateSes
 		return nil, invalidArgument("signed_nonce is required")
 	}
 
-	cert, memberID, orgID, role, serialHex, err := parseMemberCertProof(req.CertPEM, req.Nonce, req.SignedNonce)
+	presented, serialHex, err := parseMemberCertProof(req.CertPEM, req.Nonce, req.SignedNonce)
 	if err != nil {
 		return nil, err
 	}
@@ -139,63 +143,149 @@ func (s *SessionService) CreateSessionByCert(ctx context.Context, req *CreateSes
 	if err != nil {
 		return nil, internalError("failed to check certificate status", err)
 	}
-	if certRecord == nil {
-		return nil, NewDomainError(ErrorUnauthenticated, "certificate authentication failed",
-			fmt.Errorf("certificate not found in registry"))
+	if certRecord == nil || presented.SerialNumber.Text(16) != certRecord.SerialNumber {
+		return nil, certAuthFailed(fmt.Errorf("certificate not found in registry"))
 	}
-	if certRecord.Status == "revoked" {
-		return nil, NewDomainError(ErrorUnauthenticated, "certificate authentication failed",
-			fmt.Errorf("certificate has been revoked"))
+	// The presented PEM must be the issued certificate. A self-signed
+	// certificate that only reuses the serial is not that certificate.
+	if !registryPEMMatches(req.CertPEM, certRecord.CertPEM) {
+		return nil, certAuthFailed(fmt.Errorf("certificate does not match registry"))
 	}
-	if certRecord.Status == "expired" || cert.NotAfter.Before(time.Now()) {
-		return nil, NewDomainError(ErrorUnauthenticated, "certificate authentication failed",
-			fmt.Errorf("certificate has expired"))
+	if err := s.verifyRegistryCertChainsToOrgCA(ctx, certRecord); err != nil {
+		return nil, err
+	}
+	if certRecord.Status != "active" || !certRecord.ExpiresAt.After(time.Now()) {
+		return nil, certAuthFailed(fmt.Errorf("certificate is not active"))
+	}
+
+	// Identity comes from the registry record, not from presented OIDs.
+	memberID, orgID, role, err := identityFromRegistry(certRecord)
+	if err != nil {
+		return nil, err
 	}
 
 	boundSerial, ok, err := s.challenges.Consume(ctx, req.Nonce)
 	if err != nil {
 		return nil, internalError("failed to consume session challenge", err)
 	}
-	if !ok || boundSerial != serialHex {
-		return nil, NewDomainError(ErrorUnauthenticated, "certificate authentication failed",
-			fmt.Errorf("session challenge is missing, expired, or bound to a different certificate"))
+	if !ok || boundSerial != certRecord.SerialNumber {
+		return nil, certAuthFailed(fmt.Errorf("session challenge is missing, expired, or bound to a different certificate"))
 	}
 
 	// Determine scopes
 	scopes := s.resolveScopes(req.Scopes, role)
 
 	// Issue session token
-	return s.issueSessionToken(ctx, memberID, orgID, role, serialHex, scopes)
+	return s.issueSessionToken(ctx, memberID, orgID, role, certRecord.SerialNumber, scopes)
 }
 
-func parseMemberCertProof(certPEM string, nonce, signedNonce []byte) (*x509.Certificate, string, string, string, string, error) {
+// parseMemberCertProof checks that the caller holds the presented certificate's
+// private key. It does not read identity; OIDs in this certificate are untrusted
+// until the registry PEM and CA chain have been checked.
+func parseMemberCertProof(certPEM string, nonce, signedNonce []byte) (*x509.Certificate, string, error) {
 	block, _ := pem.Decode([]byte(certPEM))
 	if block == nil {
-		return nil, "", "", "", "", NewDomainError(ErrorUnauthenticated, "certificate authentication failed", fmt.Errorf("invalid PEM certificate"))
+		return nil, "", certAuthFailed(fmt.Errorf("invalid PEM certificate"))
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil, "", "", "", "", NewDomainError(ErrorUnauthenticated, "certificate authentication failed", err)
+		return nil, "", certAuthFailed(err)
 	}
 	pubKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
 	if !ok {
-		return nil, "", "", "", "", NewDomainError(ErrorUnauthenticated, "certificate authentication failed",
-			fmt.Errorf("certificate does not contain an ECDSA public key"))
+		return nil, "", certAuthFailed(fmt.Errorf("certificate does not contain an ECDSA public key"))
 	}
 	hash := sha256.Sum256(nonce)
 	if !ecdsa.VerifyASN1(pubKey, hash[:], signedNonce) {
-		return nil, "", "", "", "", NewDomainError(ErrorUnauthenticated, "certificate authentication failed",
-			fmt.Errorf("nonce signature verification failed"))
+		return nil, "", certAuthFailed(fmt.Errorf("nonce signature verification failed"))
+	}
+	if cert.SerialNumber == nil {
+		return nil, "", certAuthFailed(fmt.Errorf("certificate serial is missing"))
+	}
+	return cert, cert.SerialNumber.Text(16), nil
+}
+
+func registryPEMMatches(presented, stored string) bool {
+	if presented == "" || stored == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(stored)) == 1
+}
+
+func parseCertificatePEM(certPEM string) (*x509.Certificate, error) {
+	block, rest := pem.Decode([]byte(certPEM))
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("invalid PEM certificate")
+	}
+	if len(bytes.TrimSpace(rest)) != 0 {
+		return nil, fmt.Errorf("trailing PEM data")
+	}
+	return x509.ParseCertificate(block.Bytes)
+}
+
+// verifyRegistryCertChainsToOrgCA checks the stored certificate against the
+// org (or environment) CA named by the registry record. The presented
+// certificate is not used as a trust anchor.
+func (s *SessionService) verifyRegistryCertChainsToOrgCA(ctx context.Context, rec *pkistore.CertRecord) error {
+	if rec == nil || rec.CertType != "member" {
+		return certAuthFailed(fmt.Errorf("certificate is not a member certificate"))
+	}
+	cert, err := parseCertificatePEM(rec.CertPEM)
+	if err != nil {
+		return internalError("stored member certificate is invalid", err)
+	}
+	if cert.IsCA {
+		return certAuthFailed(fmt.Errorf("member certificate must not be a CA"))
+	}
+
+	orgCARec, err := s.certStore.GetOrgCA(ctx, rec.OrgID, rec.EnvID)
+	if err != nil {
+		return internalError("failed to load organization CA", err)
+	}
+	if orgCARec == nil || orgCARec.Status != "active" {
+		return certAuthFailed(fmt.Errorf("organization CA is not available"))
+	}
+	orgCert, err := parseCertificatePEM(orgCARec.CertPEM)
+	if err != nil {
+		return internalError("stored organization CA certificate is invalid", err)
+	}
+	if !orgCert.IsCA || !orgCert.BasicConstraintsValid {
+		return certAuthFailed(fmt.Errorf("organization CA is not a CA"))
+	}
+
+	roots := x509.NewCertPool()
+	roots.AddCert(orgCert)
+	if _, err := cert.Verify(x509.VerifyOptions{
+		Roots:     roots,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}); err != nil {
+		return certAuthFailed(err)
+	}
+	return nil
+}
+
+// identityFromRegistry reads member, org, and role from the stored certificate
+// record. Org is the registry column; member and role are extensions on the
+// issued certificate kept in that record.
+func identityFromRegistry(rec *pkistore.CertRecord) (string, string, string, error) {
+	cert, err := parseCertificatePEM(rec.CertPEM)
+	if err != nil {
+		return "", "", "", internalError("stored member certificate is invalid", err)
+	}
+	if cert.SerialNumber == nil || cert.SerialNumber.Text(16) != rec.SerialNumber {
+		return "", "", "", certAuthFailed(fmt.Errorf("registry serial does not match certificate"))
 	}
 	memberID := pki.ExtractOIDValue(cert, pki.OIDMemberID)
 	orgID := pki.ExtractOIDValue(cert, pki.OIDOrgID)
 	role := pki.ExtractOIDValue(cert, pki.OIDRole)
-	serialHex := cert.SerialNumber.Text(16)
-	if memberID == "" || orgID == "" {
-		return nil, "", "", "", "", NewDomainError(ErrorUnauthenticated, "certificate authentication failed",
-			fmt.Errorf("certificate missing required OIDs"))
+	if memberID == "" || role == "" || rec.OrgID == "" || orgID != rec.OrgID {
+		return "", "", "", certAuthFailed(fmt.Errorf("registry identity is incomplete"))
 	}
-	return cert, memberID, orgID, role, serialHex, nil
+	return memberID, rec.OrgID, role, nil
+}
+
+func certAuthFailed(cause error) error {
+	return NewDomainError(ErrorUnauthenticated, "certificate authentication failed", cause)
 }
 
 // ValidateSessionRequest represents a session validation request.
@@ -304,22 +394,20 @@ func (s *SessionService) RevokeSession(ctx context.Context, sessionToken string)
 	return nil
 }
 
-// RevokeMemberSessions invalidates all sessions for a member.
+// RevokeMemberSessions invalidates all sessions for a member in the caller's org.
 func (s *SessionService) RevokeMemberSessions(ctx context.Context, memberID, orgID string) (int, error) {
-	if err := requireFields(
-		requiredField("member_id", memberID),
-		requiredField("org_id", orgID),
-	); err != nil {
+	principal, err := authorizeMemberSessionAccess(ctx, memberID, orgID)
+	if err != nil {
 		return 0, err
 	}
 
 	subjectHash := auth.HashSubject(memberID)
-	count, err := s.policyStore.RevokeTokensBySubject(ctx, subjectHash)
+	count, err := s.policyStore.RevokeTokensBySubject(ctx, principal.TenantID, subjectHash)
 	if err != nil {
 		return 0, internalError("failed to revoke member sessions", err)
 	}
 
-	_ = s.auditLogger.Log(ctx, orgID, "member_sessions_revoked", memberID,
+	_ = s.auditLogger.Log(ctx, principal.TenantID, "member_sessions_revoked", principal.ActorID,
 		fmt.Sprintf("All sessions revoked for member %s (%d sessions)", memberID, count), "")
 
 	return count, nil
@@ -340,17 +428,15 @@ type SessionInfo struct {
 	Revoked    bool
 }
 
-// ListSessions returns active sessions for a member.
+// ListSessions returns active sessions for a member in the caller's org.
 func (s *SessionService) ListSessions(ctx context.Context, memberID, orgID string) (*ListSessionsResponse, error) {
-	if err := requireFields(
-		requiredField("member_id", memberID),
-		requiredField("org_id", orgID),
-	); err != nil {
+	principal, err := authorizeMemberSessionAccess(ctx, memberID, orgID)
+	if err != nil {
 		return nil, err
 	}
 
 	subjectHash := auth.HashSubject(memberID)
-	entries, err := s.policyStore.GetTokensBySubject(ctx, subjectHash)
+	entries, err := s.policyStore.GetTokensBySubject(ctx, principal.TenantID, subjectHash)
 	if err != nil {
 		return nil, internalError("failed to list sessions", err)
 	}
@@ -377,6 +463,19 @@ func GenerateNonce() ([]byte, error) {
 	return nonce, nil
 }
 
+// IssueBootstrapSession issues a session for a managed member whose private key
+// stays on the server. It is not exposed as an RPC.
+func (s *SessionService) IssueBootstrapSession(ctx context.Context, memberID, orgID, role, certSerial string) (string, error) {
+	if memberID == "" || orgID == "" || role == "" || certSerial == "" {
+		return "", invalidArgument("bootstrap session fields are required")
+	}
+	resp, err := s.issueSessionToken(ctx, memberID, orgID, role, certSerial, s.resolveScopes(nil, role))
+	if err != nil {
+		return "", err
+	}
+	return resp.SessionToken, nil
+}
+
 // issueSessionToken creates and stores a JWT session token.
 func (s *SessionService) issueSessionToken(ctx context.Context, memberID, orgID, role, certSerial string, scopes []string) (*CreateSessionResponse, error) {
 	// Check session count limit
@@ -386,7 +485,7 @@ func (s *SessionService) issueSessionToken(ctx context.Context, memberID, orgID,
 	}
 
 	subjectHash := auth.HashSubject(memberID)
-	existingTokens, err := s.policyStore.GetTokensBySubject(ctx, subjectHash)
+	existingTokens, err := s.policyStore.GetTokensBySubject(ctx, orgID, subjectHash)
 	if err != nil {
 		return nil, internalError("failed to check existing sessions", err)
 	}

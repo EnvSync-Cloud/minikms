@@ -589,7 +589,7 @@ func (m *MockOrgCAWrapStore) RevokeOrgCAWrap(_ context.Context, orgID, memberID 
 type MockPolicyStore struct {
 	mu       sync.RWMutex
 	policies map[string]*OrgSecurityPolicy
-	tokens   map[string][]*auth.TokenEntry // keyed by subjectHash
+	tokens   map[string][]*auth.TokenEntry // keyed by orgID + subjectHash
 }
 
 // OrgSecurityPolicy mirrors store.OrgSecurityPolicy to avoid circular imports.
@@ -617,10 +617,14 @@ func (m *MockPolicyStore) GetOrgSecurityPolicy(_ context.Context, orgID string) 
 	return &cp, nil
 }
 
-func (m *MockPolicyStore) GetTokensBySubject(_ context.Context, subjectHash string) ([]*auth.TokenEntry, error) {
+func mockScopedTokenKey(orgID, subjectHash string) string {
+	return orgID + "\x00" + subjectHash
+}
+
+func (m *MockPolicyStore) GetTokensBySubject(_ context.Context, orgID, subjectHash string) ([]*auth.TokenEntry, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	entries := m.tokens[subjectHash]
+	entries := m.tokens[mockScopedTokenKey(orgID, subjectHash)]
 	result := make([]*auth.TokenEntry, len(entries))
 	for i, e := range entries {
 		cp := *e
@@ -629,11 +633,11 @@ func (m *MockPolicyStore) GetTokensBySubject(_ context.Context, subjectHash stri
 	return result, nil
 }
 
-func (m *MockPolicyStore) RevokeTokensBySubject(_ context.Context, subjectHash string) (int, error) {
+func (m *MockPolicyStore) RevokeTokensBySubject(_ context.Context, orgID, subjectHash string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	count := 0
-	for _, e := range m.tokens[subjectHash] {
+	for _, e := range m.tokens[mockScopedTokenKey(orgID, subjectHash)] {
 		if !e.Revoked {
 			e.Revoked = true
 			count++

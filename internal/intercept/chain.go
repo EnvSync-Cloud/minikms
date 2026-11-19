@@ -54,6 +54,7 @@ type bearerClaims struct {
 	jwt.RegisteredClaims
 	OrgID string `json:"org_id,omitempty"`
 	Org   string `json:"org,omitempty"`
+	Role  string `json:"role,omitempty"`
 }
 
 func (c bearerClaims) tenantID() string {
@@ -69,10 +70,9 @@ func isPreAuth(fullMethod string) bool {
 		pb.SessionService_IssueSessionChallenge_FullMethodName,
 		// CreateSession is the proto RPC that performs CreateSessionByCert.
 		pb.SessionService_CreateSession_FullMethodName,
-		// The first member certificate is what CreateSession checks. These two
-		// calls cannot present a session that does not exist yet.
-		pb.PKIService_CreateOrgCA_FullMethodName,
-		pb.PKIService_IssueMemberCert_FullMethodName:
+		// CreateOrgCA bootstraps an organization before any member session exists.
+		// IssueMemberCert, RevokeCert, and InstallOrgCA stay authenticated.
+		pb.PKIService_CreateOrgCA_FullMethodName:
 		return true
 	default:
 		return false
@@ -155,7 +155,11 @@ func (c *chain) authenticate(ctx context.Context, fullMethod string) (context.Co
 	if err != nil || entry == nil {
 		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
 	}
-	return authn.WithPrincipal(ctx, authn.Principal{TenantID: tenantID, ActorID: actorID}), nil
+	return authn.WithPrincipal(ctx, authn.Principal{
+		TenantID: tenantID,
+		ActorID:  actorID,
+		Role:     claims.Role,
+	}), nil
 }
 
 func bearerToken(ctx context.Context) (string, error) {

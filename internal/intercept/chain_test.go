@@ -101,7 +101,6 @@ func TestPreAuthMethodsNotRejectedByAuth(t *testing.T) {
 		pb.SessionService_IssueSessionChallenge_FullMethodName,
 		pb.SessionService_CreateSession_FullMethodName,
 		pb.PKIService_CreateOrgCA_FullMethodName,
-		pb.PKIService_IssueMemberCert_FullMethodName,
 	} {
 		called := false
 		_, err := c.authUnary(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: method}, func(ctx context.Context, _ any) (any, error) {
@@ -164,6 +163,18 @@ func TestProtectedMethodsRequireSession(t *testing.T) {
 			_, err := pb.NewSessionServiceClient(conn).ValidateSession(ctx, &pb.ValidateSessionRequest{})
 			return err
 		}},
+		{"IssueMemberCert", func() error {
+			_, err := pb.NewPKIServiceClient(conn).IssueMemberCert(ctx, &pb.IssueMemberCertRequest{})
+			return err
+		}},
+		{"RevokeCert", func() error {
+			_, err := pb.NewPKIServiceClient(conn).RevokeCert(ctx, &pb.RevokeCertRequest{})
+			return err
+		}},
+		{"InstallOrgCA", func() error {
+			_, err := pb.NewPKIServiceClient(conn).InstallOrgCA(ctx, &pb.InstallOrgCARequest{})
+			return err
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -181,10 +192,11 @@ func TestAuthInterceptorSetsPrincipal(t *testing.T) {
 		OrgID:            "tenant-org",
 	})
 	sessionRaw := signToken(t, jwt.MapClaims{
-		"jti": "jti-session",
-		"sub": "actor-session",
-		"org": "tenant-session",
-		"exp": time.Now().Add(time.Hour).Unix(),
+		"jti":  "jti-session",
+		"sub":  "actor-session",
+		"org":  "tenant-session",
+		"role": "admin",
+		"exp":  time.Now().Add(time.Hour).Unix(),
 	})
 
 	gotCh := make(chan authn.Principal, 1)
@@ -244,13 +256,38 @@ func TestAuthInterceptorSetsPrincipal(t *testing.T) {
 		if !ok {
 			t.Fatal("missing principal")
 		}
-		if p != (authn.Principal{TenantID: "tenant-session", ActorID: "actor-session"}) {
+		if p != (authn.Principal{TenantID: "tenant-session", ActorID: "actor-session", Role: "admin"}) {
 			t.Fatalf("session principal = %+v", p)
 		}
 		return nil, nil
 	})
 	if err != nil {
 		t.Fatalf("session org claim: %v", err)
+	}
+}
+
+func TestAuthInterceptorCopiesRole(t *testing.T) {
+	raw := signToken(t, jwt.MapClaims{
+		"jti":  "jti-role",
+		"sub":  "actor-role",
+		"org":  "tenant-role",
+		"role": "admin",
+		"exp":  time.Now().Add(time.Hour).Unix(),
+	})
+	c := &chain{validator: &fakeValidator{}, limiter: &fakeLimiter{allow: true}}
+	inCtx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+raw))
+	_, err := c.authUnary(inCtx, nil, &grpc.UnaryServerInfo{FullMethod: pb.SessionService_ListSessions_FullMethodName}, func(ctx context.Context, _ any) (any, error) {
+		p, ok := authn.FromContext(ctx)
+		if !ok {
+			t.Fatal("missing principal")
+		}
+		if p != (authn.Principal{TenantID: "tenant-role", ActorID: "actor-role", Role: "admin"}) {
+			t.Fatalf("principal = %+v", p)
+		}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatalf("authUnary: %v", err)
 	}
 }
 

@@ -9,6 +9,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,9 +21,12 @@ import (
 	"github.com/envsync-cloud/minikms/internal/service"
 	"github.com/envsync-cloud/minikms/internal/store"
 	"github.com/envsync-cloud/minikms/internal/testutil"
+	ggrpc "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 // --- extractSessionToken tests ---
@@ -148,6 +153,14 @@ func kmsPrincipalCtx(tenantID string) context.Context {
 	return authn.WithPrincipal(context.Background(), authn.Principal{
 		TenantID: tenantID,
 		ActorID:  "session-" + tenantID,
+	})
+}
+
+func pkiPrincipal(orgID, role string) context.Context {
+	return authn.WithPrincipal(context.Background(), authn.Principal{
+		TenantID: orgID,
+		ActorID:  "actor-" + orgID,
+		Role:     role,
 	})
 }
 
@@ -322,7 +335,10 @@ func setupAuditAdapter(t *testing.T) *AuditAdapter {
 
 func TestAuditAdapter_GetAuditLogs(t *testing.T) {
 	adapter := setupAuditAdapter(t)
-	ctx := context.Background()
+	ctx := authn.WithPrincipal(context.Background(), authn.Principal{
+		TenantID: "org-1",
+		ActorID:  "actor-org-1",
+	})
 
 	resp, err := adapter.GetAuditLogs(ctx, &pb.GetAuditLogsRequest{
 		OrgId:  "org-1",
@@ -356,6 +372,12 @@ func TestAuditAdapter_VerifyChain(t *testing.T) {
 
 func setupPKIAdapter(t *testing.T) *PKIAdapter {
 	t.Helper()
+	adapter, _ := setupPKIAdapterWithStore(t)
+	return adapter
+}
+
+func setupPKIAdapterWithStore(t *testing.T) (*PKIAdapter, *testutil.MockPKICertStore) {
+	t.Helper()
 	_, _, _, _, auditLogger, _, err := testutil.SetupTestKMSStack(testutil.TestRootKeyHex)
 	if err != nil {
 		t.Fatalf("SetupTestKMSStack: %v", err)
@@ -375,7 +397,7 @@ func setupPKIAdapter(t *testing.T) *PKIAdapter {
 		t.Fatalf("load test root key: %v", err)
 	}
 	pkiSvc.SetOrgKeyManager(keys.NewOrgKeyManager(holder))
-	return NewPKIAdapter(pkiSvc)
+	return NewPKIAdapter(pkiSvc), certStore
 }
 
 func generateTestRootCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
@@ -403,6 +425,26 @@ func generateTestRootCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	return cert, key, nil
 }
 
+func TestPKIAdapter_CreateOrgCACSR_ShortOrgID(t *testing.T) {
+	adapter := setupPKIAdapter(t)
+	ctx := context.Background()
+
+	for _, orgID := range []string{"a", "1234567"} {
+		t.Run(orgID, func(t *testing.T) {
+			resp, err := adapter.CreateOrgCACSR(ctx, &pb.CreateOrgCACSRRequest{
+				OrgId:   orgID,
+				OrgName: "Short Org",
+			})
+			if resp != nil {
+				t.Fatalf("response = %+v, want nil", resp)
+			}
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("CreateOrgCACSR(%q) code = %v, want InvalidArgument (err=%v)", orgID, status.Code(err), err)
+			}
+		})
+	}
+}
+
 func TestPKIAdapter_CreateOrgCA(t *testing.T) {
 	adapter := setupPKIAdapter(t)
 	ctx := context.Background()
@@ -423,8 +465,8 @@ func TestPKIAdapter_CreateOrgCA(t *testing.T) {
 }
 
 func TestPKIAdapter_IssueMemberCert(t *testing.T) {
-	adapter := setupPKIAdapter(t)
-	ctx := context.Background()
+	adapter, store := setupPKIAdapterWithStore(t)
+	ctx := pkiPrincipal("org-pki-2", "member")
 
 	// First create org CA
 	_, err := adapter.CreateOrgCA(ctx, &pb.CreateOrgCARequest{
@@ -451,10 +493,16 @@ func TestPKIAdapter_IssueMemberCert(t *testing.T) {
 	if resp.SerialHex == "" {
 		t.Error("SerialHex is empty")
 	}
+	if resp.KeyPem != "" {
+		t.Fatal("managed issuance returned KeyPem")
+	}
+	rec, err := store.GetCertificateBySerialWithKey(ctx, resp.SerialHex)
+	if err != nil || rec == nil || len(rec.EncryptedPrivateKey) == 0 {
+		t.Fatal("managed member private key was not stored")
+	}
 }
 
 func TestPKIAdapter_IssueMemberCertAcrossReplicas(t *testing.T) {
-	ctx := context.Background()
 	certStore := testutil.NewMockPKICertStore()
 	rootCert, rootKey, err := generateTestRootCA()
 	if err != nil {
@@ -474,6 +522,7 @@ func TestPKIAdapter_IssueMemberCertAcrossReplicas(t *testing.T) {
 
 	first := newReplica()
 	second := newReplica()
+	ctx := pkiPrincipal("org-ha-adapter", "admin")
 	if _, err := first.CreateOrgCA(ctx, &pb.CreateOrgCARequest{
 		OrgId: "org-ha-adapter", OrgName: "HA Adapter Org",
 	}); err != nil {
@@ -487,14 +536,17 @@ func TestPKIAdapter_IssueMemberCertAcrossReplicas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IssueMemberCert on second replica: %v", err)
 	}
-	if resp.SerialHex == "" {
+	if resp.SerialHex == "" || resp.CertPem == "" {
 		t.Fatal("second replica did not issue a member certificate")
+	}
+	if resp.KeyPem != "" {
+		t.Fatal("managed issuance returned KeyPem")
 	}
 }
 
 func TestPKIAdapter_IssueMemberCert_NoOrgCA(t *testing.T) {
 	adapter := setupPKIAdapter(t)
-	_, err := adapter.IssueMemberCert(context.Background(), &pb.IssueMemberCertRequest{
+	_, err := adapter.IssueMemberCert(pkiPrincipal("org-nonexistent", "admin"), &pb.IssueMemberCertRequest{
 		MemberId:    "member-1",
 		MemberEmail: "alice@example.com",
 		OrgId:       "org-nonexistent",
@@ -600,13 +652,16 @@ func TestPKIAdapter_GetRootCA(t *testing.T) {
 
 func TestPKIAdapter_RevokeCert(t *testing.T) {
 	adapter := setupPKIAdapter(t)
-	ctx := context.Background()
+	ctx := pkiPrincipal("org-rev", "admin")
 
 	// Create org CA and member cert
 	_, _ = adapter.CreateOrgCA(ctx, &pb.CreateOrgCARequest{OrgId: "org-rev", OrgName: "Rev Org"})
-	memberResp, _ := adapter.IssueMemberCert(ctx, &pb.IssueMemberCertRequest{
+	memberResp, err := adapter.IssueMemberCert(ctx, &pb.IssueMemberCertRequest{
 		MemberId: "mem-rev", MemberEmail: "r@x.com", OrgId: "org-rev", Role: "member",
 	})
+	if err != nil {
+		t.Fatalf("IssueMemberCert: %v", err)
+	}
 
 	resp, err := adapter.RevokeCert(ctx, &pb.RevokeCertRequest{
 		SerialHex: memberResp.SerialHex,
@@ -646,12 +701,15 @@ func TestPKIAdapter_GetCRL_NoOrgCA(t *testing.T) {
 
 func TestPKIAdapter_CheckOCSP(t *testing.T) {
 	adapter := setupPKIAdapter(t)
-	ctx := context.Background()
+	ctx := pkiPrincipal("org-ocsp", "admin")
 
 	_, _ = adapter.CreateOrgCA(ctx, &pb.CreateOrgCARequest{OrgId: "org-ocsp", OrgName: "OCSP Org"})
-	memberResp, _ := adapter.IssueMemberCert(ctx, &pb.IssueMemberCertRequest{
+	memberResp, err := adapter.IssueMemberCert(ctx, &pb.IssueMemberCertRequest{
 		MemberId: "mem-ocsp", MemberEmail: "o@x.com", OrgId: "org-ocsp", Role: "member",
 	})
+	if err != nil {
+		t.Fatalf("IssueMemberCert: %v", err)
+	}
 
 	resp, err := adapter.CheckOCSP(ctx, &pb.CheckOCSPRequest{
 		SerialHex: memberResp.SerialHex,
@@ -663,6 +721,178 @@ func TestPKIAdapter_CheckOCSP(t *testing.T) {
 	if resp.Status != 0 {
 		t.Errorf("expected status 0 (good), got %d", resp.Status)
 	}
+}
+
+func TestPKIAdapter_IssueMemberCert_Unauthenticated(t *testing.T) {
+	adapter := setupPKIAdapter(t)
+	ctx := context.Background()
+	if _, err := adapter.CreateOrgCA(ctx, &pb.CreateOrgCARequest{OrgId: "org-unauth-issue", OrgName: "Unauth Org"}); err != nil {
+		t.Fatalf("CreateOrgCA: %v", err)
+	}
+	resp, err := adapter.IssueMemberCert(ctx, &pb.IssueMemberCertRequest{
+		MemberId: "member-1", MemberEmail: "alice@example.com", OrgId: "org-unauth-issue", Role: "master",
+	})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("code = %v, want Unauthenticated (err=%v)", status.Code(err), err)
+	}
+	if resp != nil && (resp.KeyPem != "" || resp.CertPem != "") {
+		t.Fatal("unauthenticated IssueMemberCert returned certificate material")
+	}
+}
+
+func TestPKIAdapter_RevokeAndInstallRequireAdmin(t *testing.T) {
+	adapter := setupPKIAdapter(t)
+	member := pkiPrincipal("org-admin-gate", "member")
+	if _, err := adapter.RevokeCert(context.Background(), &pb.RevokeCertRequest{OrgId: "org-admin-gate", SerialHex: "aa"}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("unauthenticated RevokeCert code = %v, want Unauthenticated", status.Code(err))
+	}
+	if _, err := adapter.InstallOrgCA(context.Background(), &pb.InstallOrgCARequest{OrgId: "org-admin-gate", CertPem: "x"}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("unauthenticated InstallOrgCA code = %v, want Unauthenticated", status.Code(err))
+	}
+	if _, err := adapter.RevokeCert(member, &pb.RevokeCertRequest{OrgId: "org-admin-gate", SerialHex: "aa"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("member RevokeCert code = %v, want PermissionDenied", status.Code(err))
+	}
+	if _, err := adapter.InstallOrgCA(member, &pb.InstallOrgCARequest{OrgId: "org-admin-gate", CertPem: "x"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("member InstallOrgCA code = %v, want PermissionDenied", status.Code(err))
+	}
+	otherAdmin := pkiPrincipal("org-other", "admin")
+	if _, err := adapter.RevokeCert(otherAdmin, &pb.RevokeCertRequest{OrgId: "org-admin-gate", SerialHex: "aa"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("cross-tenant RevokeCert code = %v, want PermissionDenied", status.Code(err))
+	}
+	if _, err := adapter.IssueMemberCert(otherAdmin, &pb.IssueMemberCertRequest{
+		MemberId: "m", MemberEmail: "a@b.c", OrgId: "org-admin-gate", Role: "member",
+	}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("cross-tenant IssueMemberCert code = %v, want PermissionDenied", status.Code(err))
+	}
+}
+
+func TestPKIAdapter_InstallOrgCA_RejectsUnrootedChain(t *testing.T) {
+	adapter := setupPKIAdapter(t)
+	ctx := pkiPrincipal("org-install-01", "admin")
+	csrResp, err := adapter.CreateOrgCACSR(context.Background(), &pb.CreateOrgCACSRRequest{
+		OrgId: "org-install-01", OrgName: "Install Org",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrgCACSR: %v", err)
+	}
+	foreignCert, foreignKey, err := generateTestRootCA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := signCSRAsCA(t, csrResp.CsrPem, foreignCert, foreignKey)
+	chain := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: foreignCert.Raw})
+	_, err = adapter.InstallOrgCA(ctx, &pb.InstallOrgCARequest{
+		OrgId: "org-install-01", CertPem: certPEM, ChainPem: string(chain),
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument (err=%v)", status.Code(err), err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "platform root") {
+		t.Fatalf("error = %v, want platform root rejection", err)
+	}
+}
+
+func TestCreateOrgCABootstrapSessionOnce(t *testing.T) {
+	adapter, store := setupPKIAdapterWithStore(t)
+	issuer := &fakeBootstrapIssuer{token: "dev-bootstrap-token"}
+	adapter.SetBootstrapSessionIssuer(issuer)
+
+	lis := bufconn.Listen(1024 * 1024)
+	srv := ggrpc.NewServer()
+	pb.RegisterPKIServiceServer(srv, adapter)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+
+	conn, err := ggrpc.NewClient("passthrough:///bufnet",
+		ggrpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		ggrpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	client := pb.NewPKIServiceClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var hdr metadata.MD
+	resp, err := client.CreateOrgCA(ctx, &pb.CreateOrgCARequest{OrgId: "org-bootstrap-1", OrgName: "Bootstrap Org"}, ggrpc.Header(&hdr))
+	if err != nil {
+		t.Fatalf("CreateOrgCA: %v", err)
+	}
+	if strings.Contains(resp.GetCertPem(), "PRIVATE KEY") {
+		t.Fatal("CreateOrgCA response contained a private key")
+	}
+	token := hdr.Get(BootstrapSessionHeader)
+	serial := hdr.Get(BootstrapMemberSerialHeader)
+	if len(token) != 1 || token[0] != issuer.token || len(serial) != 1 || serial[0] == "" {
+		t.Fatalf("bootstrap headers token=%v serial=%v", token, serial)
+	}
+	if issuer.calls != 1 || issuer.role != "admin" || issuer.orgID != "org-bootstrap-1" {
+		t.Fatalf("issuer = %+v", issuer)
+	}
+	rec, err := store.GetCertificateBySerialWithKey(ctx, serial[0])
+	if err != nil || rec == nil || len(rec.EncryptedPrivateKey) == 0 {
+		t.Fatal("bootstrap member key was not stored")
+	}
+
+	var again metadata.MD
+	if _, err := client.CreateOrgCA(ctx, &pb.CreateOrgCARequest{OrgId: "org-bootstrap-1", OrgName: "Bootstrap Org"}, ggrpc.Header(&again)); err != nil {
+		t.Fatalf("second CreateOrgCA: %v", err)
+	}
+	if len(again.Get(BootstrapSessionHeader)) != 0 || issuer.calls != 1 {
+		t.Fatalf("existing org minted another session (calls=%d header=%v)", issuer.calls, again.Get(BootstrapSessionHeader))
+	}
+}
+
+type fakeBootstrapIssuer struct {
+	token string
+	calls int
+	orgID string
+	role  string
+}
+
+func (f *fakeBootstrapIssuer) IssueBootstrapSession(_ context.Context, memberID, orgID, role, certSerial string) (string, error) {
+	f.calls++
+	f.orgID = orgID
+	f.role = role
+	if memberID == "" || certSerial == "" {
+		return "", status.Error(codes.InvalidArgument, "missing bootstrap member")
+	}
+	return f.token, nil
+}
+
+func signCSRAsCA(t *testing.T, csrPEM string, parent *x509.Certificate, parentKey *ecdsa.PrivateKey) string {
+	t.Helper()
+	block, _ := pem.Decode([]byte(csrPEM))
+	if block == nil {
+		t.Fatal("csr pem")
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notBefore := parent.NotBefore
+	if notBefore.Before(time.Now().Add(-time.Minute)) {
+		notBefore = time.Now().Add(-time.Minute)
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+		SerialNumber:          big.NewInt(42),
+		Subject:               csr.Subject,
+		NotBefore:             notBefore,
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            1,
+	}, parent, csr.PublicKey, parentKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }
 
 // --- Session Adapter integration tests ---
@@ -712,8 +942,13 @@ func TestSessionAdapter_RevokeSession_Invalid(t *testing.T) {
 
 func TestSessionAdapter_ListSessions(t *testing.T) {
 	adapter, _ := setupSessionAdapter(t)
+	ctx := authn.WithPrincipal(context.Background(), authn.Principal{
+		TenantID: "org-1",
+		ActorID:  "member-1",
+		Role:     "member",
+	})
 
-	resp, err := adapter.ListSessions(context.Background(), &pb.ListSessionsRequest{
+	resp, err := adapter.ListSessions(ctx, &pb.ListSessionsRequest{
 		MemberId: "member-1",
 		OrgId:    "org-1",
 	})

@@ -385,12 +385,14 @@ func (s *PostgresStore) StoreCertificate(ctx context.Context, rec *pkistore.Cert
 }
 
 func (s *PostgresStore) GetCertificateBySerial(ctx context.Context, serialNumber string) (*pkistore.CertRecord, error) {
+	// env_id selects the issuing CA. An empty value is the org intermediate,
+	// not an environment CA.
 	row := s.pool.QueryRow(ctx,
-		`SELECT id, serial_number, cert_type, org_id, subject_cn, cert_pem, status, issued_at, expires_at
+		`SELECT id, serial_number, cert_type, org_id, COALESCE(env_id, ''), subject_cn, cert_pem, status, issued_at, expires_at
 		 FROM certificates WHERE serial_number = $1`, serialNumber)
 
 	var r pkistore.CertRecord
-	err := row.Scan(&r.ID, &r.SerialNumber, &r.CertType, &r.OrgID, &r.SubjectCN, &r.CertPEM, &r.Status, &r.IssuedAt, &r.ExpiresAt)
+	err := row.Scan(&r.ID, &r.SerialNumber, &r.CertType, &r.OrgID, &r.EnvID, &r.SubjectCN, &r.CertPEM, &r.Status, &r.IssuedAt, &r.ExpiresAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -933,13 +935,20 @@ func (s *PostgresStore) UpsertOrgSecurityPolicy(ctx context.Context, policy *Org
 
 // --- Extended TokenRegistry for session tokens ---
 
-// GetTokensBySubject returns all active tokens for a given subject hash.
-func (s *PostgresStore) GetTokensBySubject(ctx context.Context, subjectHash string) ([]*auth.TokenEntry, error) {
+// GetTokensBySubject returns unexpired tokens for a subject in one org.
+// token_registry has no org column; the minting certificate supplies it.
+func (s *PostgresStore) GetTokensBySubject(ctx context.Context, orgID, subjectHash string) ([]*auth.TokenEntry, error) {
+	if orgID == "" || subjectHash == "" {
+		return nil, fmt.Errorf("org_id and subject_hash are required")
+	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT jti, subject_hash, jwt_hash, issued_at, expires_at, revoked
-		 FROM token_registry
-		 WHERE subject_hash = $1 AND expires_at > NOW()
-		 ORDER BY issued_at DESC`, subjectHash)
+		`SELECT t.jti, t.subject_hash, t.jwt_hash, t.issued_at, t.expires_at, t.revoked
+		 FROM token_registry t
+		 INNER JOIN certificates c ON c.serial_number = t.cert_serial
+		 WHERE c.org_id = $1
+		   AND t.subject_hash = $2
+		   AND t.expires_at > NOW()
+		 ORDER BY t.issued_at DESC`, orgID, subjectHash)
 	if err != nil {
 		return nil, err
 	}
@@ -956,12 +965,22 @@ func (s *PostgresStore) GetTokensBySubject(ctx context.Context, subjectHash stri
 	return entries, rows.Err()
 }
 
-// RevokeTokensBySubject revokes all active tokens for a given subject hash.
-func (s *PostgresStore) RevokeTokensBySubject(ctx context.Context, subjectHash string) (int, error) {
+// RevokeTokensBySubject revokes unexpired tokens for a subject in one org.
+// token_registry has no org column; the minting certificate supplies it.
+func (s *PostgresStore) RevokeTokensBySubject(ctx context.Context, orgID, subjectHash string) (int, error) {
+	if orgID == "" || subjectHash == "" {
+		return 0, fmt.Errorf("org_id and subject_hash are required")
+	}
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE token_registry SET revoked = TRUE
-		 WHERE subject_hash = $1 AND revoked = FALSE AND expires_at > NOW()`,
-		subjectHash)
+		`UPDATE token_registry AS t
+		 SET revoked = TRUE
+		 FROM certificates AS c
+		 WHERE t.cert_serial = c.serial_number
+		   AND c.org_id = $1
+		   AND t.subject_hash = $2
+		   AND t.revoked = FALSE
+		   AND t.expires_at > NOW()`,
+		orgID, subjectHash)
 	if err != nil {
 		return 0, err
 	}
