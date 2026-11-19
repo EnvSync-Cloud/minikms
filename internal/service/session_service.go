@@ -469,6 +469,8 @@ func (s *SessionService) IssueBootstrapSession(ctx context.Context, memberID, or
 	if memberID == "" || orgID == "" || role == "" || certSerial == "" {
 		return "", invalidArgument("bootstrap session fields are required")
 	}
+	// Reissue replaces the previous admin session so the per-subject cap is not exhausted.
+	_, _ = s.policyStore.RevokeTokensBySubject(ctx, orgID, auth.HashSubject(memberID))
 	resp, err := s.issueSessionToken(ctx, memberID, orgID, role, certSerial, s.resolveScopes(nil, role))
 	if err != nil {
 		return "", err

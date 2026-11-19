@@ -843,8 +843,8 @@ func TestCreateOrgCABootstrapSessionOnce(t *testing.T) {
 	if _, err := client.CreateOrgCA(ctx, &pb.CreateOrgCARequest{OrgId: "org-bootstrap-1", OrgName: "Bootstrap Org"}, ggrpc.Header(&again)); err != nil {
 		t.Fatalf("second CreateOrgCA: %v", err)
 	}
-	if len(again.Get(BootstrapSessionHeader)) != 0 || issuer.calls != 1 {
-		t.Fatalf("existing org minted another session (calls=%d header=%v)", issuer.calls, again.Get(BootstrapSessionHeader))
+	if len(again.Get(BootstrapSessionHeader)) != 1 || again.Get(BootstrapSessionHeader)[0] != issuer.token || issuer.calls != 2 {
+		t.Fatalf("existing org did not refresh the admin session (calls=%d header=%v)", issuer.calls, again.Get(BootstrapSessionHeader))
 	}
 }
 
