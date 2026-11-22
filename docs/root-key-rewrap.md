@@ -20,10 +20,11 @@ The command reads and updates:
 
 Certificate rows whose `cert_type` is not on that allowlist are not read or
 updated. A null `encrypted_private_key` is not in scope. `vault_entries` and
-`org_ca_wraps` are not root-key sealed and are
-left unchanged. Escrow shares are sealed with the escrow seal key and are not
-rewrapped. If an active root escrow set exists, the command exits without
-changing data. Re-split that escrow set before running the rewrap.
+`org_ca_wraps` are not root-key sealed and are left unchanged. Escrow shares
+are sealed with the escrow seal key and are not rewrapped. This command does
+not support deployments with an active root escrow set. If one exists, the
+command exits without changing data. Rotating a root key that is under escrow
+is out of scope for this command.
 
 `MINIKMS_HKDF_SALT` must match the server. When it is unset, the command uses
 the server default. The database must already include `key_escrow_sets` so the
@@ -76,8 +77,10 @@ bin/minikms-rewrap \
 
 The real run uses one transaction. It rewraps the in-scope rows and reads
 them back to confirm they decrypt with the new root key before commit. If any
-in-scope row does not decrypt with the current root key, the command rolls
-back and leaves the database unchanged.
+in-scope row does not decrypt with the current root key, or any other error
+occurs before commit, the command rolls back and leaves the database
+unchanged. A failure to write the count report after commit does not roll
+back.
 
 Output is counts only: `key_versions` scanned, rewrapped, and failed;
 `certificates` scanned, rewrapped, and failed per cert type; `mode=dry-run`
@@ -86,6 +89,12 @@ or `mode=commit`; and `orgs`.
 After a committed run, start miniKMS with the new root key
 (`MINIKMS_ROOT_KEY_FILE` or `MINIKMS_ROOT_KEY`). Keep the previous key file
 until the new process is up and serving the existing data.
+
+Exit status 0 means the report was written. Exit status 1 means the rewrap
+was not committed. That includes a dry-run whose report could not be written.
+Exit status 3 means the rewrap committed and the count report could not be
+written. The command prints that on stderr. miniKMS must now be started with
+the new root key.
 
 ## Rollback
 

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,6 +16,37 @@ import (
 	"github.com/envsync-cloud/minikms/internal/crypto"
 	"github.com/envsync-cloud/minikms/internal/rewrap"
 )
+
+func TestHandleExitCodes(t *testing.T) {
+	writeErr := errors.New("report sink failed")
+	committed := fmt.Errorf("%w: %w", rewrap.ErrCommittedReportFailed, writeErr)
+
+	var stderr bytes.Buffer
+	if code := handle(committed, &stderr); code != 3 {
+		t.Fatalf("committed code=%d stderr=%q", code, stderr.String())
+	}
+	text := stderr.String()
+	if !strings.Contains(text, "minikms-rewrap:") || !strings.Contains(text, "COMMITTED") || !strings.Contains(text, "miniKMS must now be started with the new root key") {
+		t.Fatalf("stderr=%q", text)
+	}
+	assertNoHex(t, text, "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+
+	stderr.Reset()
+	if code := handle(writeErr, &stderr); code != 1 {
+		t.Fatalf("write code=%d stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "COMMITTED") {
+		t.Fatalf("plain write error looks committed: %q", stderr.String())
+	}
+
+	stderr.Reset()
+	if code := handle(nil, &stderr); code != 0 || stderr.Len() != 0 {
+		t.Fatalf("nil code=%d stderr=%q", code, stderr.String())
+	}
+	if code := handle(flag.ErrHelp, &stderr); code != 0 || stderr.Len() != 0 {
+		t.Fatalf("help code=%d stderr=%q", code, stderr.String())
+	}
+}
 
 func TestParseFlagsDefaults(t *testing.T) {
 	dryRun, confirm, path, err := parseFlags([]string{"--new-key-file", "root.key"}, io.Discard)

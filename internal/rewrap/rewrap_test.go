@@ -188,8 +188,18 @@ func TestRewrapRefusesActiveRootEscrow(t *testing.T) {
 		if !errors.Is(err, rewrap.ErrActiveRootEscrow) {
 			t.Fatalf("dry-run=%t err=%v", dryRun, err)
 		}
-		if !strings.Contains(err.Error(), "re-split") {
-			t.Fatalf("err = %v", err)
+		msg := err.Error()
+		if strings.Contains(msg, "re-split") || strings.Contains(msg, "resplit") {
+			t.Fatalf("err tells the operator to re-split: %v", err)
+		}
+		for _, phrase := range []string{
+			"does not support deployments with an active root escrow set",
+			"without changing data",
+			"out of scope",
+		} {
+			if !strings.Contains(msg, phrase) {
+				t.Fatalf("err = %q, missing %q", msg, phrase)
+			}
 		}
 		if out != "" {
 			t.Fatalf("output = %q", out)
@@ -200,6 +210,107 @@ func TestRewrapRefusesActiveRootEscrow(t *testing.T) {
 		assertSame(t, f.store, before)
 		assertNoKeyHex(t, err.Error(), f.oldKey, f.newKey)
 	}
+}
+
+func TestReportWriteFailure(t *testing.T) {
+	sinkErr := errors.New("report sink failed")
+
+	t.Run("commit", func(t *testing.T) {
+		f := newFixture(t)
+		err := rewrap.Run(context.Background(), f.store, rewrap.Options{
+			OldKey:  f.oldKey,
+			NewKey:  f.newKey,
+			DryRun:  false,
+			Confirm: true,
+		}, failWriter{err: sinkErr})
+		if !errors.Is(err, rewrap.ErrCommittedReportFailed) {
+			t.Fatalf("err=%v", err)
+		}
+		if !errors.Is(err, sinkErr) {
+			t.Fatalf("write error not wrapped: %v", err)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "COMMITTED") || !strings.Contains(msg, "miniKMS must now be started with the new root key") {
+			t.Fatalf("err=%v", err)
+		}
+		assertNoKeyHex(t, msg, f.oldKey, f.newKey)
+		if f.store.commits != 1 || f.store.updates == 0 {
+			t.Fatalf("commits=%d updates=%d", f.store.commits, f.store.updates)
+		}
+		for id, plain := range f.plains {
+			ct := f.store.ciphertext(id)
+			if bytes.Equal(ct, f.original[id]) {
+				t.Fatalf("%s was not committed", id)
+			}
+			got := mustOpen(t, f.newKey, f.orgOf[id], ct, f.aads[id])
+			if !bytes.Equal(got, plain) {
+				t.Fatalf("%s plaintext mismatch after commit", id)
+			}
+			crypto.ZeroizeBytes(got)
+			mustNotOpen(t, f.oldKey, f.orgOf[id], ct, f.aads[id])
+		}
+	})
+
+	t.Run("dry-run", func(t *testing.T) {
+		f := newFixture(t)
+		before := f.store.snapshot()
+		err := rewrap.Run(context.Background(), f.store, rewrap.Options{
+			OldKey: f.oldKey,
+			NewKey: f.newKey,
+			DryRun: true,
+		}, failWriter{err: sinkErr})
+		if err == nil {
+			t.Fatal("expected report write error")
+		}
+		if errors.Is(err, rewrap.ErrCommittedReportFailed) {
+			t.Fatal("dry-run report failure reported as committed")
+		}
+		if !errors.Is(err, sinkErr) {
+			t.Fatalf("err=%v", err)
+		}
+		if strings.Contains(err.Error(), "COMMITTED") {
+			t.Fatalf("dry-run err=%v", err)
+		}
+		assertNoKeyHex(t, err.Error(), f.oldKey, f.newKey)
+		if f.store.commits != 0 || f.store.updates != 0 {
+			t.Fatalf("commits=%d updates=%d", f.store.commits, f.store.updates)
+		}
+		assertSame(t, f.store, before)
+	})
+
+	t.Run("decrypt failure", func(t *testing.T) {
+		f := newFixture(t)
+		f.corrupt("kv2")
+		before := f.store.snapshot()
+		err := rewrap.Run(context.Background(), f.store, rewrap.Options{
+			OldKey:  f.oldKey,
+			NewKey:  f.newKey,
+			DryRun:  false,
+			Confirm: true,
+		}, failWriter{err: sinkErr})
+		if err == nil {
+			t.Fatal("expected report write error")
+		}
+		if errors.Is(err, rewrap.ErrCommittedReportFailed) {
+			t.Fatal("rolled-back rewrap reported as committed")
+		}
+		if !errors.Is(err, sinkErr) {
+			t.Fatalf("err=%v", err)
+		}
+		assertNoKeyHex(t, err.Error(), f.oldKey, f.newKey)
+		if f.store.commits != 0 || f.store.updates != 0 {
+			t.Fatalf("commits=%d updates=%d", f.store.commits, f.store.updates)
+		}
+		assertSame(t, f.store, before)
+	})
+}
+
+type failWriter struct {
+	err error
+}
+
+func (w failWriter) Write([]byte) (int, error) {
+	return 0, w.err
 }
 
 func TestRewrapRefusesUnconfirmedWrite(t *testing.T) {

@@ -22,8 +22,16 @@ var ErrSameRootKey = errors.New("new root key must differ from the current root 
 // ErrConfirmRequired is returned when a writing run omits confirmation.
 var ErrConfirmRequired = errors.New("real rewrap requires --dry-run=false and --confirm")
 
-// ErrActiveRootEscrow is returned when a root escrow set is still active.
-var ErrActiveRootEscrow = errors.New("active root escrow set exists; the escrow set must be re-split first")
+// ErrActiveRootEscrow is returned when an active root escrow set exists.
+// The command does not support that deployment and leaves stored data unchanged.
+// Rotating a root key that is under escrow is out of scope.
+var ErrActiveRootEscrow = errors.New("active root escrow set exists; this command does not support deployments with an active root escrow set and exits without changing data; rotating a root key that is under escrow is out of scope")
+
+// ErrCommittedReportFailed is returned when the rewrap transaction has
+// committed and the count report could not be written. The write error is
+// wrapped. Stored data already uses the new root key, so miniKMS must now
+// be started with that key. A dry-run report failure is not this error.
+var ErrCommittedReportFailed = errors.New("rewrap COMMITTED but the report could not be written; miniKMS must now be started with the new root key")
 
 // Options configures one rewrap.
 type Options struct {
@@ -104,7 +112,9 @@ func Validate(opts Options) error {
 // Dry-run decrypts every in-scope row and trial-encrypts with the new key
 // inside a read-only transaction. A commit run updates those rows in one
 // transaction, re-reads them, and verifies they decrypt with the new key
-// before commit. Any error rolls the transaction back.
+// before commit. Any error before commit rolls the transaction back.
+// A failure to write the count report after a successful commit does not
+// roll back; it returns ErrCommittedReportFailed.
 func Run(ctx context.Context, store Store, opts Options, out io.Writer) error {
 	if err := Validate(opts); err != nil {
 		return err
@@ -167,7 +177,10 @@ func Run(ctx context.Context, store Store, opts Options, out io.Writer) error {
 		return fmt.Errorf("commit rewrap: %w", err)
 	}
 	finished = true
-	return writeReport(out, rep)
+	if err := writeReport(out, rep); err != nil {
+		return fmt.Errorf("%w: %w", ErrCommittedReportFailed, err)
+	}
+	return nil
 }
 
 func rewrapTx(ctx context.Context, tx Tx, opts Options, secrets *secretBufs) (report, error) {
