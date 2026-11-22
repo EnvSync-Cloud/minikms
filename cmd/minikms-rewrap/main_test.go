@@ -1,0 +1,99 @@
+package main
+
+import (
+	"bytes"
+	"crypto/subtle"
+	"encoding/hex"
+	"errors"
+	"flag"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/envsync-cloud/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/rewrap"
+)
+
+func TestParseFlagsDefaults(t *testing.T) {
+	dryRun, confirm, path, err := parseFlags([]string{"--new-key-file", "root.key"}, io.Discard)
+	if err != nil || !dryRun || confirm || path != "root.key" {
+		t.Fatalf("dry=%t confirm=%t path=%q err=%v", dryRun, confirm, path, err)
+	}
+	dryRun, confirm, path, err = parseFlags([]string{"--new-key-file", "root.key", "--dry-run=false", "--confirm"}, io.Discard)
+	if err != nil || dryRun || !confirm || path != "root.key" {
+		t.Fatalf("dry=%t confirm=%t path=%q err=%v", dryRun, confirm, path, err)
+	}
+	if _, _, _, err := parseFlags([]string{"-h"}, io.Discard); !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("help err=%v", err)
+	}
+}
+
+func TestExecuteRefusesBeforeDatabase(t *testing.T) {
+	current := bytes.Repeat([]byte{0x11}, 32)
+	replacement := bytes.Repeat([]byte{0x22}, 32)
+	t.Cleanup(func() {
+		crypto.ZeroizeBytes(current)
+		crypto.ZeroizeBytes(replacement)
+	})
+	currentHex := hex.EncodeToString(current)
+	t.Setenv("MINIKMS_ROOT_KEY", currentHex)
+	t.Setenv("MINIKMS_ROOT_KEY_FILE", "")
+	t.Setenv("MINIKMS_DB_URL", "postgres://should-not-connect")
+
+	var stdout bytes.Buffer
+	missing := filepath.Join(t.TempDir(), "missing.key")
+	err := execute([]string{"--new-key-file", missing}, &stdout, io.Discard)
+	if err == nil {
+		t.Fatal("missing file accepted")
+	}
+	if strings.Contains(err.Error(), "should-not-connect") || strings.Contains(err.Error(), "MINIKMS_DB_URL") {
+		t.Fatal("missing file reached the database")
+	}
+	assertNoHex(t, err.Error()+stdout.String(), currentHex, hex.EncodeToString(replacement))
+
+	same := filepath.Join(t.TempDir(), "same.key")
+	if err := os.WriteFile(same, []byte(currentHex+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	err = execute([]string{"--new-key-file", same, "--dry-run=false", "--confirm"}, &stdout, io.Discard)
+	if !errors.Is(err, rewrap.ErrSameRootKey) {
+		t.Fatalf("err=%v", err)
+	}
+	assertNoHex(t, err.Error()+stdout.String(), currentHex)
+
+	next := filepath.Join(t.TempDir(), "next.key")
+	if err := os.WriteFile(next, []byte(hex.EncodeToString(replacement)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	err = execute([]string{"--new-key-file", next, "--dry-run=false"}, &stdout, io.Discard)
+	if !errors.Is(err, rewrap.ErrConfirmRequired) {
+		t.Fatalf("err=%v", err)
+	}
+	if strings.Contains(err.Error(), "should-not-connect") {
+		t.Fatal("unconfirmed run reached the database")
+	}
+	assertNoHex(t, err.Error()+stdout.String(), currentHex, hex.EncodeToString(replacement))
+
+	loaded, err := rewrap.LoadNewRootKey(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { crypto.ZeroizeBytes(loaded) })
+	if subtle.ConstantTimeCompare(loaded, replacement) != 1 {
+		t.Fatal("replacement file was not loaded")
+	}
+}
+
+func assertNoHex(t *testing.T, text string, hexs ...string) {
+	t.Helper()
+	lower := strings.ToLower(text)
+	for _, encoded := range hexs {
+		if encoded != "" && strings.Contains(lower, encoded) {
+			t.Fatal("output contains root key hex")
+		}
+	}
+}
