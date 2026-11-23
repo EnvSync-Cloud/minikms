@@ -8,9 +8,11 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -237,13 +239,14 @@ type vaultTestCtx struct {
 	orgCACert    *x509.Certificate
 	memberKey    *ecdsa.PrivateKey
 	memberSerial string
+	orgKeyMgr    *keys.OrgKeyManager
 }
 
 func setupVaultTest(t *testing.T) *vaultTestCtx {
 	t.Helper()
 
 	// Setup KMS stack
-	_, _, dekMgr, _, auditLogger, _, err := testutil.SetupTestKMSStack(testutil.TestRootKeyHex)
+	_, orgKeyMgr, dekMgr, _, auditLogger, _, err := testutil.SetupTestKMSStack(testutil.TestRootKeyHex)
 	if err != nil {
 		t.Fatalf("SetupTestKMSStack: %v", err)
 	}
@@ -339,6 +342,7 @@ func setupVaultTest(t *testing.T) *vaultTestCtx {
 
 	// Create vault service
 	vaultSvc := NewVaultService(dekMgr, orgCAWrapMgr, vaultStore, auditLogger, sessionSvc)
+	vaultSvc.SetOrgKeyManager(orgKeyMgr)
 
 	return &vaultTestCtx{
 		vaultSvc:     vaultSvc,
@@ -350,6 +354,7 @@ func setupVaultTest(t *testing.T) *vaultTestCtx {
 		orgCACert:    orgCACert,
 		memberKey:    memberKey,
 		memberSerial: memberSerial,
+		orgKeyMgr:    orgKeyMgr,
 	}
 }
 
@@ -1039,4 +1044,125 @@ func TestGetOrgCAPublicKey_NotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing org CA")
 	}
+}
+
+func TestVaultRead_UnwrapsWrappedMemberKey(t *testing.T) {
+	tc := setupVaultTest(t)
+	plantManagedMemberMaterial(t, tc, sealTestMemberKey(t, tc, tc.memberKey))
+	assertManagedVaultRead(t, tc, []byte("vault-entry-value"))
+}
+
+func TestMemberKeyLegacyRead_Enabled(t *testing.T) {
+	tc := setupVaultTest(t)
+	tc.vaultSvc.SetMemberKeyLegacyRead(true)
+	legacy := crypto.MarshalECPrivateKey(tc.memberKey)
+	defer crypto.ZeroizeBytes(legacy)
+	plantManagedMemberMaterial(t, tc, legacy)
+	assertManagedVaultRead(t, tc, []byte("legacy-vault-value"))
+}
+
+func TestMemberKeyLegacyRead_Disabled(t *testing.T) {
+	tc := setupVaultTest(t)
+	tc.vaultSvc.SetMemberKeyLegacyRead(false)
+	legacy := crypto.MarshalECPrivateKey(tc.memberKey)
+	defer crypto.ZeroizeBytes(legacy)
+	plantManagedMemberMaterial(t, tc, legacy)
+
+	ctx := context.Background()
+	token := createVaultSessionToken(t, tc, []string{"vault:read", "vault:write"})
+	if _, err := tc.vaultSvc.Write(ctx, token, &VaultWriteRequest{
+		OrgID: "org-001", ScopeID: "scope-1", EntryType: "secret", Key: "LEGACY",
+		Value: []byte("legacy-vault-value"), CreatedBy: "member-001",
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	_, err := tc.vaultSvc.Read(ctx, token, &VaultReadRequest{
+		OrgID: "org-001", ScopeID: "scope-1", EntryType: "secret", Key: "LEGACY",
+		ClientSideDecrypt: false,
+	})
+	errText := ""
+	if err != nil {
+		errText = err.Error()
+	}
+	if containsKeyMaterial(errText, legacy) {
+		t.Fatal("legacy read error included member key material")
+	}
+	if err == nil {
+		t.Fatal("legacy member key read succeeded with the flag disabled")
+	}
+	if !strings.Contains(errText, "legacy member-key read is disabled") {
+		t.Fatalf("read error = %q", errText)
+	}
+}
+
+func sealTestMemberKey(t *testing.T, tc *vaultTestCtx, key *ecdsa.PrivateKey) []byte {
+	t.Helper()
+	orgKey, err := tc.orgKeyMgr.DeriveOrgKey("org-001")
+	if err != nil {
+		t.Fatalf("derive organization key: %v", err)
+	}
+	defer crypto.ZeroizeBytes(orgKey)
+	raw := crypto.MarshalECPrivateKey(key)
+	defer crypto.ZeroizeBytes(raw)
+	sealed, err := crypto.Encrypt(orgKey, raw, []byte(keys.MemberKeyAAD("org-001", tc.memberSerial)))
+	if err != nil {
+		t.Fatalf("seal member key: %v", err)
+	}
+	return sealed
+}
+
+func plantManagedMemberMaterial(t *testing.T, tc *vaultTestCtx, material []byte) {
+	t.Helper()
+	tc.vaultStore.mu.Lock()
+	defer tc.vaultStore.mu.Unlock()
+	rec := tc.vaultStore.orgCerts["org-001"]
+	if rec == nil || len(rec.EncryptedPrivateKey) != 0 {
+		t.Fatal("durable organization CA key must stay unset")
+	}
+	tc.vaultStore.wraps["org-001:member-001"] = &keys.OrgCAWrapRecord{
+		OrgID:      "org-001",
+		MemberID:   "member-001",
+		CertSerial: tc.memberSerial,
+	}
+	tc.vaultStore.certs[tc.memberSerial] = &pkistore.CertRecord{
+		SerialNumber:        tc.memberSerial,
+		CertType:            "member",
+		OrgID:               "org-001",
+		Status:              "active",
+		EncryptedPrivateKey: append([]byte(nil), material...),
+	}
+}
+
+func assertManagedVaultRead(t *testing.T, tc *vaultTestCtx, value []byte) {
+	t.Helper()
+	ctx := context.Background()
+	token := createVaultSessionToken(t, tc, []string{"vault:read", "vault:write"})
+	if _, err := tc.vaultSvc.Write(ctx, token, &VaultWriteRequest{
+		OrgID: "org-001", ScopeID: "scope-1", EntryType: "secret", Key: "MANAGED",
+		Value: value, CreatedBy: "member-001",
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	resp, err := tc.vaultSvc.Read(ctx, token, &VaultReadRequest{
+		OrgID: "org-001", ScopeID: "scope-1", EntryType: "secret", Key: "MANAGED",
+		ClientSideDecrypt: false,
+	})
+	if err != nil {
+		raw := crypto.MarshalECPrivateKey(tc.memberKey)
+		defer crypto.ZeroizeBytes(raw)
+		if containsKeyMaterial(err.Error(), raw) {
+			t.Fatal("managed vault read failed and the error included key material")
+		}
+		t.Fatalf("managed vault read failed: %v", err)
+	}
+	if !bytes.Equal(resp.EncryptedValue, value) {
+		t.Fatalf("managed vault read length = %d, want %d", len(resp.EncryptedValue), len(value))
+	}
+}
+
+func containsKeyMaterial(text string, material []byte) bool {
+	if len(material) == 0 {
+		return false
+	}
+	return strings.Contains(text, string(material)) || strings.Contains(text, hex.EncodeToString(material))
 }
