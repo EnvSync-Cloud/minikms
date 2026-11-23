@@ -736,6 +736,88 @@ func TestIssueMemberCert_PrivateKeyRoundtrip(t *testing.T) {
 	}
 }
 
+func TestIssueMemberCert_PersistsWrappedKey(t *testing.T) {
+	svc, _, _, certStore := setupPKIWithStore(t)
+	ctx := context.Background()
+	const orgID = "org-member-wrap"
+
+	_, orgCACert, orgCAKey, _, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: orgID, OrgName: "Member Wrap Org",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrgCAFull: %v", err)
+	}
+
+	resp, err := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
+		MemberID: "m-wrap", MemberEmail: "wrap@test.com", OrgID: orgID,
+		Role: "admin", OrgCACert: orgCACert, OrgCAKey: orgCAKey,
+	})
+	if err != nil {
+		t.Fatalf("IssueMemberCert: %v", err)
+	}
+	if resp.KeyPEM == "" || resp.CertPEM == "" || resp.SerialHex == "" {
+		t.Fatal("IssueMemberCert returned an empty certificate or key")
+	}
+
+	certBlock, _ := pem.Decode([]byte(resp.CertPEM))
+	if certBlock == nil {
+		t.Fatal("certificate PEM did not decode")
+	}
+	keyBlock, _ := pem.Decode([]byte(resp.KeyPEM))
+	if keyBlock == nil {
+		t.Fatal("key PEM did not decode")
+	}
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+	privKey, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	if err != nil {
+		t.Fatalf("ParseECPrivateKey: %v", err)
+	}
+	pubKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatal("issued certificate public key is not ECDSA")
+	}
+	if !pubKey.Equal(&privKey.PublicKey) {
+		t.Fatal("KeyPEM does not match the issued certificate")
+	}
+
+	rec, err := certStore.GetCertificateBySerialWithKey(ctx, resp.SerialHex)
+	if err != nil {
+		t.Fatalf("stored member certificate: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("stored member certificate is missing")
+	}
+	legacy := crypto.MarshalECPrivateKey(privKey)
+	defer crypto.ZeroizeBytes(legacy)
+	if bytes.Equal(rec.EncryptedPrivateKey, legacy) {
+		t.Fatal("persisted member key material is the legacy encoding")
+	}
+
+	orgKey, err := svc.orgKeyMgr.DeriveOrgKey(orgID)
+	if err != nil {
+		t.Fatalf("derive organization key: %v", err)
+	}
+	defer crypto.ZeroizeBytes(orgKey)
+
+	opened, err := crypto.Decrypt(orgKey, rec.EncryptedPrivateKey, []byte(keys.MemberKeyAAD(orgID, resp.SerialHex)))
+	if err != nil {
+		t.Fatal("persisted member key material did not open with the member-key associated data")
+	}
+	defer crypto.ZeroizeBytes(opened)
+	if !bytes.Equal(opened, legacy) {
+		t.Fatal("member-key envelope did not open to the issued key")
+	}
+
+	other, err := crypto.Decrypt(orgKey, rec.EncryptedPrivateKey, []byte(orgCAKeyAAD(orgID, resp.SerialHex)))
+	if err == nil {
+		crypto.ZeroizeBytes(other)
+		t.Fatal("member key material opened with organization CA associated data")
+	}
+}
+
 func TestCreateOrgWithWrapping_WrapManagerCalled(t *testing.T) {
 	svc, _, _, _ := setupPKIWithStore(t)
 	ctx := context.Background()

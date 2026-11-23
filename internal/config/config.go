@@ -38,6 +38,12 @@ type Config struct {
 	// HKDF salt for key derivation (override to make miniKMS instance-specific)
 	HKDFSalt string `envconfig:"MINIKMS_HKDF_SALT" default:"envsync-minikms-v1"`
 
+	// MemberKeyLegacyRead allows opening managed member key rows that are not yet
+	// stored as member-key envelopes. It stays enabled until the wrap-member-keys
+	// backfill check passes.
+	// TODO: remove the legacy member-key read path after the member-key wrap backfill check passes.
+	MemberKeyLegacyRead bool `envconfig:"MINIKMS_MEMBER_KEY_LEGACY_READ" default:"true"`
+
 	// Shamir defaults
 	ShamirTotalShares int `envconfig:"MINIKMS_SHAMIR_TOTAL_SHARES" default:"5"`
 	ShamirThreshold   int `envconfig:"MINIKMS_SHAMIR_THRESHOLD" default:"3"`

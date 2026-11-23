@@ -14,7 +14,7 @@ type CertRecord struct {
 	EnvID               string
 	SubjectCN           string
 	CertPEM             string
-	EncryptedPrivateKey []byte // For managed members: encrypted private key bytes
+	EncryptedPrivateKey []byte // Envelope-encrypted private key material when the row stores one
 	Status              string // active, revoked, expired
 	IssuedAt            time.Time
 	ExpiresAt           time.Time
