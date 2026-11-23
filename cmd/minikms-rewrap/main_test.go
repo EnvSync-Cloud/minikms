@@ -90,6 +90,9 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if !strings.Contains(usage, "Exit status 4") || !strings.Contains(usage, "unknown") {
 		t.Fatalf("usage missing status 4: %s", usage)
 	}
+	if !strings.Contains(usage, "Member-key envelopes") || !strings.Contains(usage, "previous encoding") {
+		t.Fatalf("usage missing member-key scope: %s", usage)
+	}
 	assertUnknownCommitGuidance(t, usage)
 }
 

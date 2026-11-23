@@ -110,6 +110,8 @@ func parseFlags(args []string, stderr io.Writer) (dryRun bool, confirm bool, new
 		_, _ = fmt.Fprintf(out, "Current root key: MINIKMS_ROOT_KEY_FILE or MINIKMS_ROOT_KEY\n")
 		_, _ = fmt.Fprintf(out, "Database: MINIKMS_DB_URL\n")
 		_, _ = fmt.Fprintf(out, "HKDF salt: MINIKMS_HKDF_SALT when the server sets it\n")
+		_, _ = fmt.Fprintf(out, "Member-key envelopes are re-sealed with the same associated data.\n")
+		_, _ = fmt.Fprintf(out, "Empty member rows and member rows in the previous encoding are left unchanged.\n")
 		_, _ = fmt.Fprintf(out, "Exit status 1: the rewrap was not committed.\n")
 		_, _ = fmt.Fprintf(out, "Exit status 3: the rewrap committed and the report could not be written. miniKMS must now be started with the new root key.\n")
 		_, _ = fmt.Fprintf(out, "Exit status 4: the commit outcome is unknown. Keep miniKMS stopped. "+

@@ -171,7 +171,9 @@ For root and Org CA disaster recovery, enable the audited Shamir escrow flow and
 follow the [escrow recovery runbook](docs/escrow-recovery-runbook.md). The
 `minikms-escrow` admin CLI exports owner-only custodian packages, enforces the
 configured K-of-N threshold, and creates a fresh share generation after every
-successful recovery.
+successful recovery. `minikms-rewrap` re-seals organization CA keys and
+member-key envelopes when the root key changes. See the
+[root key rewrap](docs/root-key-rewrap.md) notes.
 
 ### Run Locally
 

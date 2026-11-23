@@ -35,8 +35,8 @@ var (
 
 // MemberKeyAAD binds managed member key material to its organization and certificate serial.
 // The format is member-key:<orgID>:<serial>. It is distinct from the organization CA
-// associated data org-ca-key:<orgID>:<serial>. A later root-key rewrap of organization
-// master-key envelopes needs to re-seal blobs that use this associated data.
+// associated data org-ca-key:<orgID>:<serial>. Root-key rewrap reseals blobs that
+// use this associated data.
 func MemberKeyAAD(orgID, serial string) string {
 	return "member-key:" + orgID + ":" + serial
 }

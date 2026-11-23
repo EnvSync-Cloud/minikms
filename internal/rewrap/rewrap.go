@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/envsync-cloud/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/keys"
 )
 
 const (
@@ -72,11 +73,20 @@ type certCounts struct {
 	counts
 }
 
+type memberCounts struct {
+	opened           int
+	wrappedRewrapped int
+	legacySkipped    int
+	emptySkipped     int
+	failed           int
+}
+
 type report struct {
 	mode         string
 	orgs         int
 	keyVersions  counts
 	certificates []certCounts
+	members      memberCounts
 }
 
 type sealedRow struct {
@@ -217,8 +227,17 @@ func rewrapTx(ctx context.Context, tx Tx, opts Options, secrets *secretBufs) (re
 	if err != nil {
 		return report{}, err
 	}
+	members, err := tx.ListMemberKeys(ctx)
+	if err != nil {
+		return report{}, err
+	}
 	for _, row := range certs {
 		if !allowlisted(row.CertType, certTypes) {
+			return report{}, fmt.Errorf("refusing certificate outside the rewrap allowlist")
+		}
+	}
+	for _, row := range members {
+		if row.CertType != CertTypeMember {
 			return report{}, fmt.Errorf("refusing certificate outside the rewrap allowlist")
 		}
 	}
@@ -265,6 +284,31 @@ func rewrapTx(ctx context.Context, tx Tx, opts Options, secrets *secretBufs) (re
 			aad:   aad,
 			plain: plain,
 		})
+	}
+
+	for _, row := range members {
+		noteOrg(orgs, row.OrgID)
+		kind, plain := classifyMember(secrets, oldCache, opts.OldKey, row)
+		switch kind {
+		case keys.MemberKeyWrapped:
+			secrets.track(plain)
+			rep.members.opened++
+			work = append(work, sealedRow{
+				cert:  true,
+				id:    row.ID,
+				orgID: row.OrgID,
+				aad:   []byte(keys.MemberKeyAAD(row.OrgID, row.SerialNumber)),
+				plain: plain,
+			})
+		case keys.MemberKeyRaw:
+			crypto.ZeroizeBytes(plain)
+			rep.members.legacySkipped++
+		case keys.MemberKeyEmpty:
+			rep.members.emptySkipped++
+		default:
+			crypto.ZeroizeBytes(plain)
+			rep.members.failed++
+		}
 	}
 	rep.orgs = len(orgs)
 
@@ -321,7 +365,7 @@ func (r report) failCount() int {
 	for _, c := range r.certificates {
 		n += c.failed
 	}
-	return n
+	return n + r.members.failed
 }
 
 func (r *report) markRewrapped() {
@@ -329,6 +373,26 @@ func (r *report) markRewrapped() {
 	for i := range r.certificates {
 		r.certificates[i].rewrapped = r.certificates[i].scanned - r.certificates[i].failed
 	}
+	r.members.wrappedRewrapped = r.members.opened
+}
+
+// classifyMember reports whether a member row is an envelope under root,
+// the previous member-key encoding, empty, or unrecognized.
+// Wrapped and raw results include key bytes that the caller must zeroize.
+func classifyMember(secrets *secretBufs, cache map[string][]byte, root []byte, row CertificateRow) (string, []byte) {
+	if len(row.EncryptedPrivateKey) == 0 {
+		return keys.MemberKeyEmpty, nil
+	}
+	orgKey, err := cachedOrgKey(secrets, cache, root, row.OrgID)
+	if err != nil {
+		kind, plain := keys.ClassifyMemberKeyMaterial(nil, row.EncryptedPrivateKey, row.OrgID, row.SerialNumber)
+		if kind == keys.MemberKeyRaw {
+			return kind, plain
+		}
+		crypto.ZeroizeBytes(plain)
+		return keys.MemberKeyFailed, nil
+	}
+	return keys.ClassifyMemberKeyMaterial(orgKey, row.EncryptedPrivateKey, row.OrgID, row.SerialNumber)
 }
 
 func noteOrg(orgs map[string]struct{}, orgID string) {
@@ -472,6 +536,8 @@ func writeReport(w io.Writer, rep report) error {
 		_, _ = fmt.Fprintf(&b, "certificates cert_type=%s scanned=%d rewrapped=%d failed=%d\n",
 			c.certType, c.scanned, c.rewrapped, c.failed)
 	}
+	_, _ = fmt.Fprintf(&b, "member_wrapped_rewrapped=%d member_legacy_skipped=%d member_empty_skipped=%d member_failed=%d\n",
+		rep.members.wrappedRewrapped, rep.members.legacySkipped, rep.members.emptySkipped, rep.members.failed)
 	_, err := io.WriteString(w, b.String())
 	return err
 }
