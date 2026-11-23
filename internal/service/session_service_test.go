@@ -413,6 +413,39 @@ func TestValidateSession(t *testing.T) {
 	}
 }
 
+func TestValidateSession_EmptyRegistrySerialRejected(t *testing.T) {
+	svc, registry, certStore, _ := setupTestSessionService(t)
+	ctx := context.Background()
+
+	memberKey, _, certPEM, serialHex := createTestMemberCert(t, certStore)
+	if err := certStore.StoreCertificate(ctx, &pkistore.CertRecord{
+		SerialNumber: serialHex,
+		CertType:     "member",
+		OrgID:        "org-001",
+		CertPEM:      string(certPEM),
+		Status:       "active",
+		IssuedAt:     time.Now().Add(-time.Hour),
+		ExpiresAt:    time.Now().Add(365 * 24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("StoreCertificate: %v", err)
+	}
+	sessionResp := mintTestSession(t, svc, memberKey, string(certPEM), serialHex, nil)
+
+	registry.mu.Lock()
+	for _, entry := range registry.tokens {
+		entry.CertSerial = ""
+	}
+	registry.mu.Unlock()
+
+	resp, err := svc.ValidateSession(ctx, &ValidateSessionRequest{SessionToken: sessionResp.SessionToken})
+	if err != nil {
+		t.Fatalf("ValidateSession: %v", err)
+	}
+	if resp.Valid {
+		t.Fatal("cert-session token with an empty registry serial should be rejected")
+	}
+}
+
 func TestValidateSession_Invalid(t *testing.T) {
 	svc, _, _, _ := setupTestSessionService(t)
 	resp, err := svc.ValidateSession(context.Background(), &ValidateSessionRequest{SessionToken: "invalid-token"})

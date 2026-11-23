@@ -193,6 +193,8 @@ func main() {
 		auditLogger,
 		sessionSvc,
 	)
+	vaultSvc.SetOrgKeyManager(orgKeyMgr)
+	vaultSvc.SetMemberKeyLegacyRead(cfg.MemberKeyLegacyRead)
 
 	// Create gRPC adapters
 	kmsAdapter := grpcadapter.NewKMSAdapter(kmsSvc, keySvc)

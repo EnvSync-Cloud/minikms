@@ -185,11 +185,17 @@ func (s *PostgresStore) StoreToken(ctx context.Context, entry *auth.TokenEntry) 
 
 func (s *PostgresStore) GetToken(ctx context.Context, jti string) (*auth.TokenEntry, error) {
 	row := s.pool.QueryRow(ctx,
-		`SELECT jti, subject_hash, jwt_hash, issued_at, expires_at, revoked
-		 FROM token_registry WHERE jti = $1`, jti)
+		`SELECT t.jti, t.subject_hash, t.jwt_hash, t.issued_at, t.expires_at, t.revoked,
+		        COALESCE(t.cert_serial, ''),
+		        COALESCE(c.status, '')
+		 FROM token_registry t
+		 LEFT JOIN certificates c
+		   ON COALESCE(t.cert_serial, '') <> ''
+		  AND c.serial_number = t.cert_serial
+		 WHERE t.jti = $1`, jti)
 
 	var e auth.TokenEntry
-	err := row.Scan(&e.JTI, &e.SubjectHash, &e.JWTHash, &e.IssuedAt, &e.ExpiresAt, &e.Revoked)
+	err := row.Scan(&e.JTI, &e.SubjectHash, &e.JWTHash, &e.IssuedAt, &e.ExpiresAt, &e.Revoked, &e.CertSerial, &e.CertStatus)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -533,6 +539,46 @@ func (s *PostgresStore) UpdateCertificateStatus(ctx context.Context, serialNumbe
 		`UPDATE certificates SET status = $1 WHERE serial_number = $2`,
 		status, serialNumber)
 	return err
+}
+
+// RevokeCertificate marks the certificate revoked, inserts the CRL row, and
+// revokes token_registry sessions for that serial in one transaction.
+func (s *PostgresStore) RevokeCertificate(ctx context.Context, serialNumber string, entry *pkistore.CRLEntryRecord) error {
+	if serialNumber == "" || entry == nil || entry.CertSerial != serialNumber {
+		return fmt.Errorf("certificate serial is required")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE certificates SET status = 'revoked' WHERE serial_number = $1`,
+		serialNumber)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("certificate not found")
+	}
+
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO crl_entries (id, cert_serial, issuer_serial, revoked_at, reason, crl_number, is_delta)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		uuid.New().String(), entry.CertSerial, entry.IssuerSerial, entry.RevokedAt, entry.Reason, entry.CRLNumber, entry.IsDelta); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE token_registry
+		 SET revoked = true
+		 WHERE cert_serial = $1 AND revoked = false`,
+		serialNumber); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *PostgresStore) InsertCRLEntry(ctx context.Context, entry *pkistore.CRLEntryRecord) error {

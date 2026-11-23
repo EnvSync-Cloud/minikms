@@ -12,6 +12,12 @@ func TestLoad_Defaults(t *testing.T) {
 	t.Setenv("MINIKMS_ROOT_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 	t.Setenv("MINIKMS_SESSION_SIGNING_KEY", "test-key")
 	t.Setenv("MINIKMS_SESSION_SIGNING_KEY_FILE", "")
+	if value, ok := os.LookupEnv("MINIKMS_MEMBER_KEY_LEGACY_READ"); ok {
+		t.Setenv("MINIKMS_MEMBER_KEY_LEGACY_READ", value)
+	}
+	if err := os.Unsetenv("MINIKMS_MEMBER_KEY_LEGACY_READ"); err != nil {
+		t.Fatalf("unset legacy read flag: %v", err)
+	}
 
 	cfg, err := Load()
 	if err != nil {
@@ -63,6 +69,9 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.EscrowCustodians != "custodian-1,custodian-2,custodian-3,custodian-4,custodian-5" {
 		t.Errorf("EscrowCustodians = %q", cfg.EscrowCustodians)
 	}
+	if !cfg.MemberKeyLegacyRead {
+		t.Error("MemberKeyLegacyRead = false, want true")
+	}
 }
 
 func TestLoad_CustomValues(t *testing.T) {
@@ -87,6 +96,7 @@ func TestLoad_CustomValues(t *testing.T) {
 	t.Setenv("MINIKMS_ESCROW_ENABLED", "true")
 	t.Setenv("MINIKMS_ESCROW_SEAL_KEY_FILE", "/run/secrets/escrow-seal-key")
 	t.Setenv("MINIKMS_ESCROW_CUSTODIANS", "alice,bob,carol,dave,erin,frank,grace")
+	t.Setenv("MINIKMS_MEMBER_KEY_LEGACY_READ", "false")
 
 	cfg, err := Load()
 	if err != nil {
@@ -137,6 +147,9 @@ func TestLoad_CustomValues(t *testing.T) {
 	}
 	if !cfg.EscrowEnabled || cfg.EscrowSealKeyFile != "/run/secrets/escrow-seal-key" {
 		t.Errorf("unexpected escrow config: enabled=%t file=%q", cfg.EscrowEnabled, cfg.EscrowSealKeyFile)
+	}
+	if cfg.MemberKeyLegacyRead {
+		t.Error("MemberKeyLegacyRead = true, want false")
 	}
 }
 

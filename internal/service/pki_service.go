@@ -231,6 +231,25 @@ func (s *PKIService) encryptOrgCAKey(orgID, serial string, key *ecdsa.PrivateKey
 	return encrypted, nil
 }
 
+func (s *PKIService) encryptMemberKey(orgID, serial string, key *ecdsa.PrivateKey) ([]byte, error) {
+	if s.orgKeyMgr == nil {
+		return nil, NewDomainError(ErrorFailedPrecondition, "durable member key storage is not initialized", nil)
+	}
+	orgKey, err := s.orgKeyMgr.DeriveOrgKey(orgID)
+	if err != nil {
+		return nil, internalError("failed to derive organization key", err)
+	}
+	defer crypto.ZeroizeBytes(orgKey)
+
+	keyBytes := crypto.MarshalECPrivateKey(key)
+	defer crypto.ZeroizeBytes(keyBytes)
+	encrypted, err := crypto.Encrypt(orgKey, keyBytes, []byte(memberKeyAAD(orgID, serial)))
+	if err != nil {
+		return nil, internalError("failed to wrap member key", err)
+	}
+	return encrypted, nil
+}
+
 func (s *PKIService) decryptOrgCAKey(record *pkistore.CertRecord) (*ecdsa.PrivateKey, error) {
 	if len(record.EncryptedPrivateKey) == 0 {
 		return nil, NewDomainError(ErrorFailedPrecondition,
@@ -277,6 +296,12 @@ func (s *PKIService) parseStoredOrgCA(record *pkistore.CertRecord) (*x509.Certif
 
 func orgCAKeyAAD(orgID, serial string) string {
 	return "org-ca-key:" + orgID + ":" + serial
+}
+
+// memberKeyAAD binds managed member key material to its organization and certificate serial.
+// It is distinct from orgCAKeyAAD.
+func memberKeyAAD(orgID, serial string) string {
+	return keys.MemberKeyAAD(orgID, serial)
 }
 
 func (s *PKIService) orgCAResult(record *pkistore.CertRecord) (*CreateOrgCAResponse, *x509.Certificate, *ecdsa.PrivateKey, error) {
@@ -809,19 +834,24 @@ func (s *PKIService) IssueMemberCert(ctx context.Context, req *IssueMemberCertRe
 		return nil, internalError("failed to marshal member key", err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	crypto.ZeroizeBytes(keyDER)
 
 	cert, _ := x509.ParseCertificate(certDER)
 	serialHex := cert.SerialNumber.Text(16)
 
-	// Persist to database (include private key for managed members)
+	// Persist the member certificate and its envelope-encrypted key material.
 	if s.store != nil {
+		encryptedKey, err := s.encryptMemberKey(req.OrgID, serialHex, memberKey)
+		if err != nil {
+			return nil, err
+		}
 		if err := s.store.StoreCertificateWithKey(ctx, &pkistore.CertRecord{
 			SerialNumber:        serialHex,
 			CertType:            "member",
 			OrgID:               req.OrgID,
 			SubjectCN:           req.MemberEmail,
 			CertPEM:             string(certPEM),
-			EncryptedPrivateKey: crypto.MarshalECPrivateKey(memberKey),
+			EncryptedPrivateKey: encryptedKey,
 			Status:              "active",
 			IssuedAt:            cert.NotBefore,
 			ExpiresAt:           cert.NotAfter,
@@ -1025,10 +1055,14 @@ func (s *PKIService) RevokeCert(ctx context.Context, req *RevokeCertRequest) err
 		return internalError("failed to get CRL number", err)
 	}
 
-	now := time.Now().UTC()
+	revoker, ok := s.store.(pkistore.CertificateRevoker)
+	if !ok {
+		return NewDomainError(ErrorFailedPrecondition, "certificate store cannot record revocation", nil)
+	}
 
-	// Insert CRL entry
-	if err := s.store.InsertCRLEntry(ctx, &pkistore.CRLEntryRecord{
+	now := time.Now().UTC()
+	// Certificate status, the CRL row, and session revocation commit together.
+	if err := revoker.RevokeCertificate(ctx, req.SerialHex, &pkistore.CRLEntryRecord{
 		CertSerial:   req.SerialHex,
 		IssuerSerial: orgCA.SerialNumber,
 		RevokedAt:    now,
@@ -1036,12 +1070,7 @@ func (s *PKIService) RevokeCert(ctx context.Context, req *RevokeCertRequest) err
 		CRLNumber:    crlNumber,
 		IsDelta:      false,
 	}); err != nil {
-		return internalError("failed to insert CRL entry", err)
-	}
-
-	// Update certificate status
-	if err := s.store.UpdateCertificateStatus(ctx, req.SerialHex, "revoked"); err != nil {
-		return internalError("failed to update certificate status", err)
+		return internalError("failed to revoke certificate", err)
 	}
 
 	_ = s.auditLogger.Log(ctx, req.OrgID, "cert_revoked", "system",
