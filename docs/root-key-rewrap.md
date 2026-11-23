@@ -80,7 +80,8 @@ them back to confirm they decrypt with the new root key before commit. If any
 in-scope row does not decrypt with the current root key, or any other error
 occurs before commit, the command rolls back and leaves the database
 unchanged. A failure to write the count report after commit does not roll
-back.
+back. If Commit itself returns an error, the outcome is unknown: the server
+may have committed before the acknowledgement was lost.
 
 Output is counts only: `key_versions` scanned, rewrapped, and failed;
 `certificates` scanned, rewrapped, and failed per cert type; `mode=dry-run`
@@ -91,10 +92,17 @@ After a committed run, start miniKMS with the new root key
 until the new process is up and serving the existing data.
 
 Exit status 0 means the report was written. Exit status 1 means the rewrap
-was not committed. That includes a dry-run whose report could not be written.
-Exit status 3 means the rewrap committed and the count report could not be
-written. The command prints that on stderr. miniKMS must now be started with
-the new root key.
+was not committed. That includes validation failures, decrypt failures,
+update errors that roll the transaction back, and a dry-run whose report
+could not be written. Exit status 3 means the rewrap committed and the count
+report could not be written. The command prints that on stderr. miniKMS must
+now be started with the new root key. Exit status 4 means the commit outcome
+is unknown. Commit itself returned an error, and the server may have
+committed before the acknowledgement was lost. Do not start miniKMS yet.
+Determine the state by running a dry-run with the current root key. If rows
+fail to decrypt with the old key but a dry-run using the new key file as
+MINIKMS_ROOT_KEY_FILE and any different file as --new-key-file succeeds, the
+commit landed; otherwise it did not.
 
 ## Rollback
 

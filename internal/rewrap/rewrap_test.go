@@ -212,6 +212,66 @@ func TestRewrapRefusesActiveRootEscrow(t *testing.T) {
 	}
 }
 
+func TestCommitOutcomeUnknown(t *testing.T) {
+	commitErr := errors.New("commit acknowledgement lost")
+
+	t.Run("commit", func(t *testing.T) {
+		f := newFixture(t)
+		before := f.store.snapshot()
+		f.store.commitErr = commitErr
+		out, err := f.run(t, false)
+		if !errors.Is(err, rewrap.ErrCommitOutcomeUnknown) {
+			t.Fatalf("err=%v", err)
+		}
+		if !errors.Is(err, commitErr) {
+			t.Fatalf("commit error not wrapped: %v", err)
+		}
+		if errors.Is(err, rewrap.ErrCommittedReportFailed) {
+			t.Fatal("uncertain commit reported as committed")
+		}
+		for _, phrase := range []string{
+			"do NOT start miniKMS yet",
+			"current root key",
+			"fail to decrypt with the old key",
+			"MINIKMS_ROOT_KEY_FILE",
+			"--new-key-file",
+			"the commit landed",
+			"otherwise it did not",
+		} {
+			if !strings.Contains(err.Error(), phrase) {
+				t.Fatalf("err=%q missing %q", err.Error(), phrase)
+			}
+		}
+		if out != "" {
+			t.Fatalf("report written despite uncertain commit: %q", out)
+		}
+		if f.store.commits != 0 || f.store.updates == 0 {
+			t.Fatalf("commits=%d updates=%d", f.store.commits, f.store.updates)
+		}
+		assertSame(t, f.store, before)
+	})
+
+	t.Run("dry-run", func(t *testing.T) {
+		f := newFixture(t)
+		f.store.commitErr = commitErr
+		if _, err := f.run(t, true); err != nil {
+			t.Fatalf("dry-run err=%v", err)
+		}
+		if f.store.commits != 0 {
+			t.Fatal("dry-run committed")
+		}
+	})
+
+	t.Run("decrypt failure", func(t *testing.T) {
+		f := newFixture(t)
+		f.corrupt("kv2")
+		_, err := f.run(t, false)
+		if err == nil || errors.Is(err, rewrap.ErrCommitOutcomeUnknown) {
+			t.Fatalf("err=%v", err)
+		}
+	})
+}
+
 func TestReportWriteFailure(t *testing.T) {
 	sinkErr := errors.New("report sink failed")
 
@@ -648,6 +708,7 @@ type memStore struct {
 	updates     int
 	commits     int
 	rollbacks   int
+	commitErr   error
 }
 
 func newMemStore() *memStore {
@@ -796,6 +857,9 @@ func (t *memTx) ReadCertificate(_ context.Context, id string) ([]byte, error) {
 func (t *memTx) Commit(context.Context) error {
 	if t.closed {
 		return fmt.Errorf("transaction is closed")
+	}
+	if t.store.commitErr != nil {
+		return t.store.commitErr
 	}
 	if t.readOnly {
 		t.closed = true

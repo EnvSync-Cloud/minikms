@@ -40,6 +40,38 @@ func TestHandleExitCodes(t *testing.T) {
 	}
 
 	stderr.Reset()
+	unknown := fmt.Errorf("%w: %w", rewrap.ErrCommitOutcomeUnknown, writeErr)
+	if code := handle(unknown, &stderr); code != 4 {
+		t.Fatalf("unknown code=%d stderr=%q", code, stderr.String())
+	}
+	unknownText := stderr.String()
+	for _, phrase := range []string{
+		"minikms-rewrap:",
+		"do NOT start miniKMS yet",
+		"current root key",
+		"fail to decrypt with the old key",
+		"MINIKMS_ROOT_KEY_FILE",
+		"--new-key-file",
+		"the commit landed",
+		"otherwise it did not",
+	} {
+		if !strings.Contains(unknownText, phrase) {
+			t.Fatalf("stderr=%q missing %q", unknownText, phrase)
+		}
+	}
+	if strings.Contains(unknownText, "COMMITTED") || strings.Contains(unknownText, "must now be started with the new root key") {
+		t.Fatalf("unknown outcome looks committed: %q", unknownText)
+	}
+	assertNoHex(t, unknownText, "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+
+	if exitCode(writeErr) != 1 || exitCode(committed) != 3 || exitCode(unknown) != 4 {
+		t.Fatalf("exit codes 1/3/4 = %d %d %d", exitCode(writeErr), exitCode(committed), exitCode(unknown))
+	}
+	if exitCode(nil) != 0 || exitCode(flag.ErrHelp) != 0 || exitCode(rewrap.ErrCommitOutcomeUnknown) != 4 {
+		t.Fatal("exitCode mapping mismatch")
+	}
+
+	stderr.Reset()
 	if code := handle(nil, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("nil code=%d stderr=%q", code, stderr.String())
 	}
@@ -57,8 +89,19 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if err != nil || dryRun || !confirm || path != "root.key" {
 		t.Fatalf("dry=%t confirm=%t path=%q err=%v", dryRun, confirm, path, err)
 	}
-	if _, _, _, err := parseFlags([]string{"-h"}, io.Discard); !errors.Is(err, flag.ErrHelp) {
+	var help bytes.Buffer
+	if _, _, _, err := parseFlags([]string{"-h"}, &help); !errors.Is(err, flag.ErrHelp) {
 		t.Fatalf("help err=%v", err)
+	}
+	usage := help.String()
+	if !strings.Contains(usage, "Exit status 1") || !strings.Contains(usage, "not committed") {
+		t.Fatalf("usage missing status 1: %s", usage)
+	}
+	if !strings.Contains(usage, "Exit status 4") || !strings.Contains(usage, "unknown") {
+		t.Fatalf("usage missing status 4: %s", usage)
+	}
+	if !strings.Contains(usage, "do NOT start miniKMS yet") && !strings.Contains(usage, "Do not start miniKMS yet") {
+		t.Fatalf("usage missing recovery guidance: %s", usage)
 	}
 }
 

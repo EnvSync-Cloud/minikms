@@ -33,6 +33,14 @@ var ErrActiveRootEscrow = errors.New("active root escrow set exists; this comman
 // be started with that key. A dry-run report failure is not this error.
 var ErrCommittedReportFailed = errors.New("rewrap COMMITTED but the report could not be written; miniKMS must now be started with the new root key")
 
+// ErrCommitOutcomeUnknown is returned when Commit itself returns an error
+// on a writing run. The commit error is wrapped. The server may already
+// have committed before the acknowledgement was lost, so stored data may
+// or may not use the new root key. Failures known to be before commit,
+// including validation, decrypt failures, and update errors that roll
+// back, are not this error. A dry-run does not commit and is not this error.
+var ErrCommitOutcomeUnknown = errors.New("rewrap commit outcome is unknown; do NOT start miniKMS yet. Determine the state by running a dry-run with the current root key. If rows fail to decrypt with the old key but a dry-run using the new key file as MINIKMS_ROOT_KEY_FILE and any different file as --new-key-file succeeds, the commit landed; otherwise it did not")
+
 // Options configures one rewrap.
 type Options struct {
 	OldKey  []byte
@@ -113,8 +121,10 @@ func Validate(opts Options) error {
 // inside a read-only transaction. A commit run updates those rows in one
 // transaction, re-reads them, and verifies they decrypt with the new key
 // before commit. Any error before commit rolls the transaction back.
-// A failure to write the count report after a successful commit does not
-// roll back; it returns ErrCommittedReportFailed.
+// If Commit itself returns an error, the outcome is unknown and Run
+// returns ErrCommitOutcomeUnknown. A failure to write the count report
+// after a successful commit does not roll back; it returns
+// ErrCommittedReportFailed.
 func Run(ctx context.Context, store Store, opts Options, out io.Writer) error {
 	if err := Validate(opts); err != nil {
 		return err
@@ -173,8 +183,10 @@ func Run(ctx context.Context, store Store, opts Options, out io.Writer) error {
 
 	if err := tx.Commit(ctx); err != nil {
 		finished = true
+		// A rollback after Commit returns cannot show whether the server
+		// committed before the acknowledgement was lost.
 		_ = tx.Rollback(ctx)
-		return fmt.Errorf("commit rewrap: %w", err)
+		return fmt.Errorf("%w: %w", ErrCommitOutcomeUnknown, err)
 	}
 	finished = true
 	if err := writeReport(out, rep); err != nil {
