@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/auth"
 	"github.com/envsync-cloud/minikms/internal/crypto"
 	"github.com/envsync-cloud/minikms/internal/escrow"
 	"github.com/envsync-cloud/minikms/internal/keys"
@@ -331,6 +332,88 @@ func TestRevokeCert(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error revoking already-revoked cert")
+	}
+}
+
+func TestRevokeCert_EndsSessionsForSerial(t *testing.T) {
+	svc, _, _, certStore := setupPKIWithStore(t)
+	ctx := context.Background()
+	registry := testutil.NewMockTokenRegistry()
+	certStore.BindTokenRevoker(registry)
+	registry.BindCertificateStatus(func(ctx context.Context, serial string) (string, bool, error) {
+		rec, err := certStore.GetCertificateBySerial(ctx, serial)
+		if err != nil || rec == nil {
+			return "", false, err
+		}
+		return rec.Status, true, nil
+	})
+
+	_, orgCACert, orgCAKey, _, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: "org-001", OrgName: "Test Org",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrgCAFull: %v", err)
+	}
+	revokedMember, err := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
+		MemberID: "m1", MemberEmail: "m1@test.com", OrgID: "org-001",
+		Role: "member", OrgCACert: orgCACert, OrgCAKey: orgCAKey,
+	})
+	if err != nil {
+		t.Fatalf("IssueMemberCert: %v", err)
+	}
+	liveMember, err := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
+		MemberID: "m2", MemberEmail: "m2@test.com", OrgID: "org-001",
+		Role: "admin", OrgCACert: orgCACert, OrgCAKey: orgCAKey,
+	})
+	if err != nil {
+		t.Fatalf("IssueMemberCert control: %v", err)
+	}
+
+	store := func(jti, serial string) {
+		t.Helper()
+		if err := registry.StoreToken(ctx, &auth.TokenEntry{
+			JTI:         jti,
+			SubjectHash: "subject",
+			JWTHash:     "hash",
+			IssuedAt:    time.Now(),
+			ExpiresAt:   time.Now().Add(time.Hour),
+			CertSerial:  serial,
+		}); err != nil {
+			t.Fatalf("StoreToken %s: %v", jti, err)
+		}
+	}
+	store("session-a", revokedMember.SerialHex)
+	store("session-b", revokedMember.SerialHex)
+	store("session-live", liveMember.SerialHex)
+	store("non-cert", "")
+
+	if err := svc.RevokeCert(ctx, &RevokeCertRequest{
+		SerialHex: revokedMember.SerialHex, OrgID: "org-001", Reason: 0,
+	}); err != nil {
+		t.Fatalf("RevokeCert: %v", err)
+	}
+
+	for _, jti := range []string{"session-a", "session-b"} {
+		got, err := registry.GetToken(ctx, jti)
+		if err != nil || got == nil || !got.Revoked || got.CertStatus != "revoked" {
+			t.Fatalf("%s after revoke = %+v err=%v", jti, got, err)
+		}
+	}
+	live, err := registry.GetToken(ctx, "session-live")
+	if err != nil || live == nil || live.Revoked || live.CertStatus != "active" {
+		t.Fatalf("control session = %+v err=%v", live, err)
+	}
+	nonCert, err := registry.GetToken(ctx, "non-cert")
+	if err != nil || nonCert == nil || nonCert.Revoked || nonCert.CertSerial != "" {
+		t.Fatalf("non-cert token = %+v err=%v", nonCert, err)
+	}
+	rec, err := certStore.GetCertificateBySerial(ctx, revokedMember.SerialHex)
+	if err != nil || rec == nil || rec.Status != "revoked" {
+		t.Fatalf("certificate status = %+v err=%v", rec, err)
+	}
+	crl, err := certStore.GetCertRevocationEntry(ctx, revokedMember.SerialHex)
+	if err != nil || crl == nil || crl.CertSerial != revokedMember.SerialHex {
+		t.Fatalf("crl entry = %+v err=%v", crl, err)
 	}
 }
 

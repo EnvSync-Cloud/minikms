@@ -5,14 +5,22 @@ package store
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 
 	"github.com/envsync-cloud/minikms/internal/audit"
 	"github.com/envsync-cloud/minikms/internal/auth"
 	"github.com/envsync-cloud/minikms/internal/escrow"
 	"github.com/envsync-cloud/minikms/internal/keys"
+	"github.com/envsync-cloud/minikms/internal/pkistore"
 )
 
 func setupPostgresStore(t *testing.T) *PostgresStore {
@@ -216,6 +224,195 @@ func TestPostgres_TokenRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CleanupExpired: %v", err)
 	}
+}
+
+func TestPostgres_TokenCertificateStatus(t *testing.T) {
+	pg := setupPostgresStore(t)
+	ctx := context.Background()
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
+	orgID := "e2e-certbind-" + suffix
+	serialLive := suffix + "a1"
+	serialRevoked := suffix + "b2"
+	serialMissing := suffix + "c3"
+
+	for _, serial := range []string{serialLive, serialRevoked} {
+		if err := pg.StoreCertificate(ctx, &pkistore.CertRecord{
+			SerialNumber: serial,
+			CertType:     "member",
+			OrgID:        orgID,
+			SubjectCN:    "member",
+			CertPEM:      "test-cert",
+			Status:       "active",
+			IssuedAt:     time.Now().Add(-time.Hour),
+			ExpiresAt:    time.Now().Add(24 * time.Hour),
+		}); err != nil {
+			t.Fatalf("StoreCertificate %s: %v", serial, err)
+		}
+	}
+
+	sign := func(claims jwt.MapClaims) string {
+		t.Helper()
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatalf("GenerateKey: %v", err)
+		}
+		raw, err := jwt.NewWithClaims(jwt.SigningMethodES256, claims).SignedString(key)
+		if err != nil {
+			t.Fatalf("sign: %v", err)
+		}
+		return raw
+	}
+	storeSession := func(jti, serial, raw string) {
+		t.Helper()
+		if err := pg.StoreToken(ctx, &auth.TokenEntry{
+			JTI:         jti,
+			SubjectHash: auth.HashSubject(jti),
+			JWTHash:     auth.HashJWT(raw),
+			IssuedAt:    time.Now(),
+			ExpiresAt:   time.Now().Add(time.Hour),
+			CertSerial:  serial,
+		}); err != nil {
+			t.Fatalf("StoreToken %s: %v", jti, err)
+		}
+	}
+
+	jtiLive := "live-" + serialLive
+	jtiRevoked := "revoked-" + serialRevoked
+	jtiMissing := "missing-" + serialMissing
+	jtiLegacy := "legacy-" + suffix
+	rawLive := sign(jwt.MapClaims{"jti": jtiLive, "sub": "member-live", "org": orgID, "cert_serial": serialLive})
+	rawRevoked := sign(jwt.MapClaims{"jti": jtiRevoked, "sub": "member-revoked", "org": orgID, "cert_serial": serialRevoked})
+	rawMissing := sign(jwt.MapClaims{"jti": jtiMissing, "sub": "member-missing", "org": orgID, "cert_serial": serialMissing})
+	rawLegacy := sign(jwt.MapClaims{"jti": jtiLegacy, "sub": "member-legacy", "org": orgID, "cert_serial": ""})
+	storeSession(jtiLive, serialLive, rawLive)
+	storeSession(jtiRevoked, serialRevoked, rawRevoked)
+	storeSession(jtiMissing, serialMissing, rawMissing)
+	storeSession(jtiLegacy, "", rawLegacy)
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	rawNonCert, err := auth.NewTokenIssuer(key, "minikms-e2e", time.Hour, pg).IssueToken(ctx, "user@example.com", orgID, "admin")
+	if err != nil {
+		t.Fatalf("IssueToken: %v", err)
+	}
+	nonCertClaims := &auth.Claims{}
+	if _, _, err := jwt.NewParser().ParseUnverified(rawNonCert, nonCertClaims); err != nil {
+		t.Fatalf("ParseUnverified: %v", err)
+	}
+
+	v := auth.NewJWTValidator(pg)
+	if _, err := v.ValidateByJTI(ctx, jtiLive, rawLive); err != nil {
+		t.Fatalf("live certificate: %v", err)
+	}
+	if _, err := v.ValidateByJTI(ctx, nonCertClaims.ID, rawNonCert); err != nil {
+		t.Fatalf("non-cert token: %v", err)
+	}
+	if _, err := v.ValidateByJTI(ctx, jtiMissing, rawMissing); err == nil || !strings.Contains(err.Error(), "certificate is missing") {
+		t.Fatalf("missing certificate err = %v", err)
+	}
+	if _, err := v.ValidateByJTI(ctx, jtiLegacy, rawLegacy); err == nil || !strings.Contains(err.Error(), "certificate serial is missing") {
+		t.Fatalf("empty serial cert-session err = %v", err)
+	}
+
+	if err := pg.UpdateCertificateStatus(ctx, serialRevoked, "revoked"); err != nil {
+		t.Fatalf("UpdateCertificateStatus: %v", err)
+	}
+	revokedTok, err := pg.GetToken(ctx, jtiRevoked)
+	if err != nil || revokedTok == nil {
+		t.Fatalf("GetToken: %v", err)
+	}
+	if revokedTok.Revoked {
+		t.Fatal("certificate status change alone should leave the session row unrevoked")
+	}
+	if revokedTok.CertSerial != serialRevoked || revokedTok.CertStatus != "revoked" {
+		t.Fatalf("lookup serial=%q status=%q", revokedTok.CertSerial, revokedTok.CertStatus)
+	}
+	if _, err := v.ValidateByJTI(ctx, jtiRevoked, rawRevoked); err == nil || !strings.Contains(err.Error(), "certificate is not active") {
+		t.Fatalf("revoked certificate err = %v", err)
+	}
+	if _, err := v.ValidateByJTI(ctx, jtiLive, rawLive); err != nil {
+		t.Fatalf("live certificate after another status change: %v", err)
+	}
+
+	if err := pg.RevokeCertificate(ctx, serialMissing, &pkistore.CRLEntryRecord{
+		CertSerial:   serialMissing,
+		IssuerSerial: "issuer-" + suffix,
+		RevokedAt:    time.Now().UTC(),
+		Reason:       0,
+		CRLNumber:    1,
+	}); err == nil {
+		t.Fatal("expected error revoking an unknown certificate")
+	}
+	missingTok, err := pg.GetToken(ctx, jtiMissing)
+	if err != nil || missingTok == nil || missingTok.Revoked {
+		t.Fatalf("unknown revoke changed token: revoked=%v err=%v", missingTok != nil && missingTok.Revoked, err)
+	}
+	if crl, err := pg.GetCertRevocationEntry(ctx, serialMissing); err != nil || crl != nil {
+		t.Fatalf("unknown revoke wrote a CRL entry: %+v err=%v", crl, err)
+	}
+
+	if err := pg.RevokeCertificate(ctx, serialLive, &pkistore.CRLEntryRecord{
+		CertSerial:   serialLive,
+		IssuerSerial: "issuer-" + suffix,
+		RevokedAt:    time.Now().UTC(),
+		Reason:       0,
+		CRLNumber:    1,
+	}); err != nil {
+		t.Fatalf("RevokeCertificate: %v", err)
+	}
+	liveTok, err := pg.GetToken(ctx, jtiLive)
+	if err != nil || liveTok == nil || !liveTok.Revoked || liveTok.CertStatus != "revoked" {
+		t.Fatalf("session after RevokeCertificate revoked=%v status=%q err=%v", liveTok != nil && liveTok.Revoked, liveTokCertStatus(liveTok), err)
+	}
+	if _, err := v.ValidateByJTI(ctx, jtiLive, rawLive); err == nil {
+		t.Fatal("session for a revoked certificate was accepted")
+	}
+	still, err := pg.GetToken(ctx, jtiRevoked)
+	if err != nil || still == nil || still.Revoked {
+		t.Fatal("revoking one serial marked a different session revoked")
+	}
+	nonCert, err := pg.GetToken(ctx, nonCertClaims.ID)
+	if err != nil || nonCert == nil || nonCert.Revoked || nonCert.CertSerial != "" {
+		t.Fatalf("non-cert token changed: revoked=%v serial=%q err=%v", nonCert != nil && nonCert.Revoked, nonCertSerial(nonCert), err)
+	}
+	if _, err := v.ValidateByJTI(ctx, nonCertClaims.ID, rawNonCert); err != nil {
+		t.Fatalf("non-cert token after revocation: %v", err)
+	}
+	legacyTok, err := pg.GetToken(ctx, jtiLegacy)
+	if err != nil || legacyTok == nil || legacyTok.Revoked {
+		t.Fatal("empty serial row was revoked")
+	}
+	crl, err := pg.GetCertRevocationEntry(ctx, serialLive)
+	if err != nil || crl == nil || crl.CertSerial != serialLive {
+		t.Fatalf("crl = %+v err=%v", crl, err)
+	}
+	cert, err := pg.GetCertificateBySerial(ctx, serialLive)
+	if err != nil || cert == nil || cert.Status != "revoked" {
+		t.Fatalf("certificate status = %q err=%v", certStatus(cert), err)
+	}
+}
+
+func liveTokCertStatus(entry *auth.TokenEntry) string {
+	if entry == nil {
+		return ""
+	}
+	return entry.CertStatus
+}
+
+func nonCertSerial(entry *auth.TokenEntry) string {
+	if entry == nil {
+		return ""
+	}
+	return entry.CertSerial
+}
+
+func certStatus(rec *pkistore.CertRecord) string {
+	if rec == nil {
+		return ""
+	}
+	return rec.Status
 }
 
 func TestPostgres_EscrowStoreGenerationReplacement(t *testing.T) {

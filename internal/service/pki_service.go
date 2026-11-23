@@ -1055,10 +1055,14 @@ func (s *PKIService) RevokeCert(ctx context.Context, req *RevokeCertRequest) err
 		return internalError("failed to get CRL number", err)
 	}
 
-	now := time.Now().UTC()
+	revoker, ok := s.store.(pkistore.CertificateRevoker)
+	if !ok {
+		return NewDomainError(ErrorFailedPrecondition, "certificate store cannot record revocation", nil)
+	}
 
-	// Insert CRL entry
-	if err := s.store.InsertCRLEntry(ctx, &pkistore.CRLEntryRecord{
+	now := time.Now().UTC()
+	// Certificate status, the CRL row, and session revocation commit together.
+	if err := revoker.RevokeCertificate(ctx, req.SerialHex, &pkistore.CRLEntryRecord{
 		CertSerial:   req.SerialHex,
 		IssuerSerial: orgCA.SerialNumber,
 		RevokedAt:    now,
@@ -1066,12 +1070,7 @@ func (s *PKIService) RevokeCert(ctx context.Context, req *RevokeCertRequest) err
 		CRLNumber:    crlNumber,
 		IsDelta:      false,
 	}); err != nil {
-		return internalError("failed to insert CRL entry", err)
-	}
-
-	// Update certificate status
-	if err := s.store.UpdateCertificateStatus(ctx, req.SerialHex, "revoked"); err != nil {
-		return internalError("failed to update certificate status", err)
+		return internalError("failed to revoke certificate", err)
 	}
 
 	_ = s.auditLogger.Log(ctx, req.OrgID, "cert_revoked", "system",
