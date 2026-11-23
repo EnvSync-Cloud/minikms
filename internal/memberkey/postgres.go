@@ -40,7 +40,8 @@ func NewPostgresStore(ctx context.Context, connString string) (*PostgresStore, e
 	}
 	config, err := pgxpool.ParseConfig(connString)
 	if err != nil {
-		return nil, fmt.Errorf("connect to PostgreSQL: %w", err)
+		// The parser error includes the connection string, so return a fixed message.
+		return nil, fmt.Errorf("connect to PostgreSQL: MINIKMS_DB_URL is not a valid connection string")
 	}
 	config.MaxConns = 4
 	config.MinConns = 0
