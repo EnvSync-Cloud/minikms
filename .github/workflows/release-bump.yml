@@ -1,27 +1,36 @@
 # Release bump on dev.
 #
-# A merged pull request into dev gets one bump commit and one annotated rc tag.
-# Those refs are pushed with a GitHub App token so the tag push starts
-# .github/workflows/release.yaml. The workflow GITHUB_TOKEN is not used for writes.
+# A push to dev runs this workflow. The guard runs on that push. It skips the
+# release app's own bump commit when the actor is the app bot, or when the head
+# commit message has a Release-Version trailer. That path logs
+# "bump commit from the release app; skipping" and exits successfully.
 #
-# There is no push trigger. The bump commit is pushed straight to dev, so a push
-# trigger would run this workflow again on its own commit.
+# Any other push is matched to a merged pull request. The guard reads
+# repos/<repo>/commits/<sha>/pulls with the default GITHUB_TOKEN (contents and
+# pull requests, read-only). It continues only when exactly one pull request has
+# merged_at set, base ref dev, and merge_commit_sha equal to this commit. Any
+# other push logs "push to dev is not a pull request merge; skipping" and exits
+# successfully.
 #
-# pull_request_target is used because the job must read repository variables and
-# the app private key after a merge. That is safe here: the job checks out only
-# dev, and only after a human has merged the pull request. It never checks out
-# the pull request head ref and never runs code from that head. The app token
-# is used only with the already-merged dev branch.
+# The bump commit and the annotated rc tag are pushed with a GitHub App token
+# so the tag push starts .github/workflows/release.yaml. The workflow
+# GITHUB_TOKEN stays read-only and is used for the pull request lookup.
 #
-# workflow_dispatch is the owner-run path. It tags the current dev tip.
+# GitHub merge commits use the pull request merge. The bump job checks out dev
+# and reads the tip again before it commits, because this sha may no longer be
+# the tip if another push landed first. The retry loop recomputes the rc in
+# that case. The ref update is an atomic push without --force. An existing tag
+# stops the run and is left in place.
 #
-# The bump commit does not include a skip-ci marker. CI still runs on that commit.
+# workflow_dispatch is the owner-run path. It tags the current dev tip when
+# that tip has no tag. The pull request number is 0.
+#
+# The bump commit has no skip-ci marker. CI still runs on that commit.
 
 name: Release bump (dev)
 
 on:
-  pull_request_target:
-    types: [closed]
+  push:
     branches: [dev]
   workflow_dispatch:
 
@@ -38,29 +47,33 @@ concurrency:
 jobs:
   bump:
     name: Bump and tag rc
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - name: Guard
         id: guard
         env:
           EVENT_NAME: ${{ github.event_name }}
           ACTOR: ${{ github.actor }}
-          AUTHOR: ${{ github.event.pull_request.user.login }}
           APP_SLUG: ${{ vars.RELEASE_APP_SLUG }}
           APP_ID: ${{ vars.RELEASE_APP_ID }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
+          SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           event_name="${EVENT_NAME:-}"
           actor="${ACTOR:-}"
-          author="${AUTHOR:-}"
           app_slug="${APP_SLUG:-}"
           app_id="${APP_ID:-}"
-          pr_title="${PR_TITLE:-}"
-          pr_body="${PR_BODY:-}"
+          sha="${SHA:-}"
+          repository="${REPOSITORY:-}"
           skip=false
+          pr_number=""
+          pr_labels="[]"
+          merge_sha=""
 
           message_has_prefix_line() {
             MESSAGE="$1" PREFIX="$2" awk '
@@ -75,31 +88,97 @@ jobs:
             '
           }
 
-          if [ -n "${app_slug}" ]; then
-            bot="${app_slug}[bot]"
-            if [ -n "${author}" ] && [ "${author}" = "${bot}" ]; then
-              echo "::notice::pull request author is ${bot}; no rc created"
-              skip=true
-            fi
-            if [ "${skip}" = "false" ] && [ "${actor}" = "${bot}" ]; then
-              echo "::notice::actor is ${bot}; no rc created"
-              skip=true
-            fi
-          fi
+          skip_with_notice() {
+            echo "::notice::$1"
+            echo "skip=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          }
 
-          if [ "${skip}" = "false" ]; then
-            if message_has_prefix_line "${pr_title}" "Release-Version:" || message_has_prefix_line "${pr_body}" "Release-Version:"; then
-              echo "::notice::pull request text carries the release bump marker; no rc created"
-              skip=true
-            fi
-          fi
+          case "${event_name}" in
+            push)
+              if [ -n "${app_slug}" ] && [ "${actor}" = "${app_slug}[bot]" ]; then
+                skip_with_notice "bump commit from the release app; skipping"
+              fi
+              printf '%s' "${repository}" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || {
+                echo "unexpected repository" >&2
+                exit 1
+              }
+              printf '%s' "${sha}" | grep -Eq '^[0-9a-f]{40}$' || {
+                echo "unexpected commit sha" >&2
+                exit 1
+              }
+              commit_json="$(gh api "repos/${repository}/commits/${sha}")"
+              head_message="$(printf '%s' "${commit_json}" | jq -r '.commit.message // ""')"
+              if message_has_prefix_line "${head_message}" "Release-Version:"; then
+                skip_with_notice "bump commit from the release app; skipping"
+              fi
+              # Pages are slurped, then flattened. One merged PR into dev wins.
+              pulls_json="$(gh api --paginate --slurp "repos/${repository}/commits/${sha}/pulls?per_page=100")"
+              matches="$(printf '%s' "${pulls_json}" | jq -c --arg sha "${sha}" '
+                [ .[][]
+                  | select(.merged_at != null and .base.ref == "dev" and .merge_commit_sha == $sha)
+                ]
+              ')"
+              count="$(printf '%s' "${matches}" | jq 'length')"
+              if [ "${count}" = "0" ]; then
+                skip_with_notice "push to dev is not a pull request merge; skipping"
+              fi
+              if [ "${count}" != "1" ]; then
+                skip_with_notice "push to dev matches more than one merged pull request; skipping"
+              fi
+              pr_number="$(printf '%s' "${matches}" | jq -r '.[0].number')"
+              pr_labels="$(printf '%s' "${matches}" | jq -c '[.[0].labels // [] | .[].name]')"
+              case "${pr_number}" in
+                ''|*[!0-9]*)
+                  echo "pull request number must be an integer" >&2
+                  exit 1
+                  ;;
+              esac
+              case "${pr_labels}" in
+                '['*']') ;;
+                *)
+                  echo "pull request labels are not a JSON array" >&2
+                  exit 1
+                  ;;
+              esac
+              labels_oneline="$(printf '%s' "${pr_labels}" | tr -d '\n')"
+              if [ "${labels_oneline}" != "${pr_labels}" ]; then
+                echo "pull request labels are not a single line" >&2
+                exit 1
+              fi
+              merge_sha="${sha}"
+              ;;
+            workflow_dispatch)
+              pr_number="0"
+              pr_labels="[]"
+              merge_sha=""
+              if [ -n "${app_slug}" ] && [ "${actor}" = "${app_slug}[bot]" ]; then
+                echo "::notice::actor is ${app_slug}[bot]; no rc created"
+                skip=true
+              fi
+              ;;
+            *)
+              echo "unexpected event ${event_name}" >&2
+              exit 1
+              ;;
+          esac
 
           if [ -z "${app_id}" ]; then
             echo "::warning::release app not configured; no rc created"
             skip=true
           fi
 
-          echo "skip=${skip}" >> "${GITHUB_OUTPUT}"
+          if [ "${skip}" = "true" ]; then
+            echo "skip=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          {
+            echo "skip=false"
+            echo "pr_number=${pr_number}"
+            echo "merge_sha=${merge_sha}"
+            echo "pr_labels=${pr_labels}"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Create GitHub App token
         id: app-token
@@ -131,9 +210,9 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           APP_SLUG: ${{ vars.RELEASE_APP_SLUG }}
           EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number || 0 }}
-          PR_LABELS: ${{ github.event_name == 'pull_request_target' && toJson(github.event.pull_request.labels.*.name) || '[]' }}
-          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_NUMBER: ${{ steps.guard.outputs.pr_number }}
+          PR_LABELS: ${{ steps.guard.outputs.pr_labels }}
+          MERGE_SHA: ${{ steps.guard.outputs.merge_sha }}
         run: |
           set -euo pipefail
 
@@ -144,7 +223,7 @@ jobs:
           merge_sha="${MERGE_SHA:-}"
 
           case "${event_name}" in
-            pull_request_target|workflow_dispatch)
+            push|workflow_dispatch)
               ;;
             *)
               echo "unexpected event ${event_name}" >&2
@@ -157,7 +236,7 @@ jobs:
               exit 1
               ;;
           esac
-          if [ "${event_name}" = "pull_request_target" ] && [ "${pr_number}" = "0" ]; then
+          if [ "${event_name}" = "push" ] && [ "${pr_number}" = "0" ]; then
             echo "merged pull request is missing a number" >&2
             exit 1
           fi
