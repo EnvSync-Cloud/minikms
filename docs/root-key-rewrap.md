@@ -61,6 +61,7 @@ Example output:
 
 ```text
 mode=dry-run orgs=2
+total scanned=7
 key_versions scanned=4 rewrapped=4 failed=0
 certificates cert_type=org_intermediate_ca scanned=3 rewrapped=3 failed=0
 ```
@@ -83,9 +84,10 @@ unchanged. A failure to write the count report after commit does not roll
 back. If Commit itself returns an error, the outcome is unknown: the server
 may have committed before the acknowledgement was lost.
 
-Output is counts only: `key_versions` scanned, rewrapped, and failed;
+Output is counts only: `total scanned` (the sum of `key_versions` scanned
+and `certificates` scanned); `key_versions` scanned, rewrapped, and failed;
 `certificates` scanned, rewrapped, and failed per cert type; `mode=dry-run`
-or `mode=commit`; and `orgs`.
+or `mode=commit`; and `orgs`. No key material is printed.
 
 After a committed run, start miniKMS with the new root key
 (`MINIKMS_ROOT_KEY_FILE` or `MINIKMS_ROOT_KEY`). Keep the previous key file
@@ -104,18 +106,24 @@ Determine the state with two dry-runs. Use a valid, distinct trial key: a
 freshly generated 32-byte hex key in a mode-0600 file, different from both
 the old and new keys. Delete the trial key file afterwards.
 
+A check is conclusive only if it exits 0, reports zero failures, and scanned
+at least one in-scope row (`key_versions` scanned plus `certificates` scanned
+is greater than 0). The report prints that sum as `total scanned`. Exit 0
+with zero failures and `total scanned=0` proves nothing: both keys can
+dry-run cleanly when no in-scope rows exist.
+
 Check A: dry-run with the old key as `MINIKMS_ROOT_KEY_FILE` and that trial
-key as `--new-key-file`. Only if Check A exits 0 with zero failures, the
-commit did not land; keep the old key.
+key as `--new-key-file`. Only if Check A is conclusive, the commit did not
+land; keep the old key.
 
 Check B: dry-run with the new key as `MINIKMS_ROOT_KEY_FILE` and the same
-valid, distinct trial key as `--new-key-file`. Only if Check B exits 0 with
-zero failures, the commit landed; start miniKMS with the new key.
+valid, distinct trial key as `--new-key-file`. Only if Check B is conclusive,
+the commit landed; start miniKMS with the new key.
 
-If neither check succeeds (DB errors, invalid trial key, partial failures),
-the outcome stays unknown. Keep miniKMS stopped, fix the check's cause and
-re-run, or restore from the pre-rotation DB dump with the old key per the
-rollback section.
+If both checks scan zero rows, or neither is conclusive, the outcome stays
+unknown. Keep miniKMS stopped and restore from the pre-rotation DB dump with
+the old key (or investigate). The rollback section describes restoring that
+dump.
 
 ## Rollback
 

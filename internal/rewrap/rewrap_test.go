@@ -28,6 +28,29 @@ func TestAllowlist(t *testing.T) {
 	}
 }
 
+func TestDryRunZeroInScopeRowsReportsTotalScanned(t *testing.T) {
+	f := newFixture(t)
+	delete(f.store.kvs, "kv1")
+	delete(f.store.kvs, "kv2")
+	delete(f.store.kvs, "kv3")
+	delete(f.store.certs, "ca1")
+	delete(f.store.certs, "ca2")
+	out, err := f.run(t, true)
+	if err != nil {
+		t.Fatalf("dry-run: %v", err)
+	}
+	want := fmt.Sprintf("mode=dry-run orgs=0\ntotal scanned=0\nkey_versions scanned=0 rewrapped=0 failed=0\ncertificates cert_type=%s scanned=0 rewrapped=0 failed=0\n", rewrap.CertTypeOrgIntermediateCA)
+	if out != want {
+		t.Fatalf("report:\n%s", out)
+	}
+	if f.store.read[f.memberID] || f.store.read[f.leafID] {
+		t.Fatal("out-of-scope certificate was read")
+	}
+	if f.store.updates != 0 || f.store.commits != 0 {
+		t.Fatalf("writes recorded updates=%d commits=%d", f.store.updates, f.store.commits)
+	}
+}
+
 func TestRewrapDryRun(t *testing.T) {
 	f := newFixture(t)
 	before := f.store.snapshot()
@@ -471,7 +494,7 @@ func TestLoadCurrentRootKey(t *testing.T) {
 }
 
 func wantReport(mode string, kvRewrapped, kvFailed, certRewrapped, certFailed int) string {
-	return fmt.Sprintf("mode=%s orgs=2\nkey_versions scanned=3 rewrapped=%d failed=%d\ncertificates cert_type=%s scanned=2 rewrapped=%d failed=%d\n",
+	return fmt.Sprintf("mode=%s orgs=2\ntotal scanned=5\nkey_versions scanned=3 rewrapped=%d failed=%d\ncertificates cert_type=%s scanned=2 rewrapped=%d failed=%d\n",
 		mode, kvRewrapped, kvFailed, rewrap.CertTypeOrgIntermediateCA, certRewrapped, certFailed)
 }
 
@@ -486,11 +509,18 @@ func assertUnknownCommitGuidance(t *testing.T, text string) {
 		"--new-key-file",
 		"Check A",
 		"Check B",
-		"exits 0 with zero failures",
+		"conclusive only if it exits 0",
+		"reports zero failures",
+		"scanned at least one in-scope row",
+		"key_versions + certificates scanned > 0",
+		"total scanned",
 		"the commit did not land",
 		"the commit landed",
-		"If neither check succeeds",
+		"both checks scan zero rows",
+		"neither is conclusive",
 		"the outcome stays unknown",
+		"restore from the pre-rotation DB dump with the old key",
+		"or investigate",
 		"Delete the trial key file afterwards",
 	} {
 		if !strings.Contains(text, phrase) {
@@ -500,6 +530,8 @@ func assertUnknownCommitGuidance(t *testing.T, text string) {
 	for _, phrase := range []string{
 		"otherwise it did not",
 		"any different file",
+		"Only if Check A exits 0 with zero failures",
+		"Only if Check B exits 0 with zero failures",
 	} {
 		if strings.Contains(text, phrase) {
 			t.Fatalf("text=%q contains %q", text, phrase)
