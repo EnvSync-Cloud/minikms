@@ -344,15 +344,21 @@ func (s *SessionService) ValidateSession(ctx context.Context, req *ValidateSessi
 		return &ValidateSessionResponse{Valid: false}, nil
 	}
 
-	// Verify cert serial is still valid
-	if claims.CertSerial != "" {
-		certRecord, err := s.certStore.GetCertificateBySerial(ctx, claims.CertSerial)
-		if err != nil {
-			return nil, internalError("failed to check session certificate", err)
-		}
-		if certRecord == nil || certRecord.Status != "active" {
-			return &ValidateSessionResponse{Valid: false}, nil
-		}
+	// Session tokens are cert-session tokens. The registry serial is authoritative.
+	// An empty serial, a serial that differs from the token, or a certificate
+	// that is not active is rejected.
+	if claims.CertSerial == "" || entry.CertSerial == "" || claims.CertSerial != entry.CertSerial {
+		return &ValidateSessionResponse{Valid: false}, nil
+	}
+	if s.certStore == nil {
+		return nil, internalError("failed to check session certificate", nil)
+	}
+	certRecord, err := s.certStore.GetCertificateBySerial(ctx, entry.CertSerial)
+	if err != nil {
+		return nil, internalError("failed to check session certificate", err)
+	}
+	if certRecord == nil || certRecord.Status != "active" {
+		return &ValidateSessionResponse{Valid: false}, nil
 	}
 
 	return &ValidateSessionResponse{

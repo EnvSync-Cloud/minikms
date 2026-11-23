@@ -46,6 +46,12 @@ type Store interface {
 	GetCertRevocationEntry(ctx context.Context, serialNumber string) (*CRLEntryRecord, error)
 }
 
+// CertificateRevoker commits a certificate revocation and ends sessions for
+// that serial together. PostgresStore does the writes in one database transaction.
+type CertificateRevoker interface {
+	RevokeCertificate(ctx context.Context, serialNumber string, entry *CRLEntryRecord) error
+}
+
 // OrgCABootstrapLocker serializes organization CA creation across replicas.
 // Stores that do not implement it remain suitable for single-process tests.
 type OrgCABootstrapLocker interface {
