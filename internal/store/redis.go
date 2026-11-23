@@ -19,9 +19,15 @@ func NewRedisStore(ctx context.Context, redisURL string) (*RedisStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse Redis URL: %w", err)
 	}
+	if opts.DialTimeout <= 0 || opts.DialTimeout > bootPingTimeout {
+		opts.DialTimeout = bootPingTimeout
+	}
 
 	client := redis.NewClient(opts)
-	if err := client.Ping(ctx).Err(); err != nil {
+	pingCtx, pingCancel := context.WithTimeout(ctx, bootPingTimeout)
+	defer pingCancel()
+	if err := client.Ping(pingCtx).Err(); err != nil {
+		_ = client.Close()
 		return nil, fmt.Errorf("failed to ping Redis: %w", err)
 	}
 

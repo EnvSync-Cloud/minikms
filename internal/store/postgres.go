@@ -71,13 +71,21 @@ func NewPostgresStore(ctx context.Context, connString string) (*PostgresStore, e
 	config.MinConns = 5
 	config.MaxConnLifetime = 30 * time.Minute
 	config.MaxConnIdleTime = 5 * time.Minute
+	// An unset connect_timeout otherwise becomes pgx's 2 minute dial, which
+	// would consume the whole boot retry budget in one attempt.
+	if config.ConnConfig.ConnectTimeout <= 0 {
+		config.ConnConfig.ConnectTimeout = bootPingTimeout
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create connection pool: %w", err)
 	}
 
-	if err := pool.Ping(ctx); err != nil {
+	pingCtx, pingCancel := context.WithTimeout(ctx, config.ConnConfig.ConnectTimeout)
+	defer pingCancel()
+	if err := pool.Ping(pingCtx); err != nil {
+		pool.Close()
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
