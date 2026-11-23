@@ -1,4 +1,4 @@
-.PHONY: build run test test-unit test-e2e cover cover-html proto clean docker migrate lint fmt
+.PHONY: build run test test-unit test-e2e cover cover-html proto clean docker migrate lint fmt bump
 
 BINARY_NAME=minikms
 GO=go
@@ -45,3 +45,8 @@ lint:
 
 fmt:
 	gofmt -s -w .
+
+# SPEC is patch, minor, major, rc, stable, or an explicit X.Y.Z / X.Y.Z-rc.N.
+bump:
+	@test -n "$(SPEC)" || { echo "usage: make bump SPEC=patch|minor|major|rc|stable|X.Y.Z|X.Y.Z-rc.N"; exit 1; }
+	$(GO) run ./cmd/release-bump -file VERSION $(SPEC)
