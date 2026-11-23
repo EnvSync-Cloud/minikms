@@ -1,4 +1,4 @@
-// Command release-bump updates VERSION and prints image tags for a git tag.
+// Command release-bump updates VERSION, prints the next rc version, and prints image tags for a git tag.
 package main
 
 import (
@@ -14,11 +14,14 @@ import (
 var errHelp = errors.New("help")
 
 const usageText = `release-bump [-file VERSION] <spec>
+release-bump next [-file VERSION] [-label release:patch|release:minor|release:major]
 release-bump tags -tag <git-tag> -image <image> -sha <short-sha>
 release-bump verify -tag <git-tag> [-file VERSION]
 
 spec is patch, minor, major, rc, stable, or an explicit X.Y.Z or X.Y.Z-rc.N.
 The bump form rewrites the version file and prints the new version.
+next prints the next X.Y.Z-rc.N from git tags, commits, and the version file.
+It does not write the file. -label replaces the level chosen from commits.
 tags prints prerelease=<true|false> and a tags<<EOF block for GITHUB_OUTPUT.
 verify succeeds when the version file equals the tag without the leading v.`
 
@@ -34,6 +37,8 @@ func run(args []string, stdout io.Writer) error {
 		return fmt.Errorf("missing arguments\n%s", usageText)
 	}
 	switch args[0] {
+	case "next":
+		return runNext(args[1:], stdout)
 	case "tags":
 		return runTags(args[1:], stdout)
 	case "verify":
