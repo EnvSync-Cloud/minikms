@@ -165,11 +165,18 @@ func assertUnknownCommitGuidance(t *testing.T, text string) {
 		"--new-key-file",
 		"Check A",
 		"Check B",
-		"exits 0 with zero failures",
+		"conclusive only if it exits 0",
+		"reports zero failures",
+		"scanned at least one in-scope row",
+		"key_versions + certificates scanned + opened member-key envelopes > 0",
+		"total scanned",
 		"the commit did not land",
 		"the commit landed",
-		"If neither check succeeds",
+		"both checks scan zero rows",
+		"neither is conclusive",
 		"the outcome stays unknown",
+		"restore from the pre-rotation DB dump with the old key",
+		"or investigate",
 		"Delete the trial key file afterwards",
 	} {
 		if !strings.Contains(text, phrase) {
@@ -179,6 +186,8 @@ func assertUnknownCommitGuidance(t *testing.T, text string) {
 	for _, phrase := range []string{
 		"otherwise it did not",
 		"any different file",
+		"Only if Check A exits 0 with zero failures",
+		"Only if Check B exits 0 with zero failures",
 	} {
 		if strings.Contains(text, phrase) {
 			t.Fatalf("text=%q contains %q", text, phrase)

@@ -69,6 +69,7 @@ Example output:
 
 ```text
 mode=dry-run orgs=2
+total scanned=9
 key_versions scanned=4 rewrapped=4 failed=0
 certificates cert_type=org_intermediate_ca scanned=3 rewrapped=3 failed=0
 member_wrapped_rewrapped=2 member_legacy_skipped=1 member_empty_skipped=1 member_failed=0
@@ -92,15 +93,19 @@ unchanged. A failure to write the count report after commit does not roll
 back. If Commit itself returns an error, the outcome is unknown: the server
 may have committed before the acknowledgement was lost.
 
-Output is counts only: `key_versions` scanned, rewrapped, and failed;
-`certificates` scanned, rewrapped, and failed per cert type;
+Output is counts only: `total scanned`; `key_versions` scanned, rewrapped,
+and failed; `certificates` scanned, rewrapped, and failed per cert type;
 `member_wrapped_rewrapped`, `member_legacy_skipped`, `member_empty_skipped`,
-and `member_failed`; `mode=dry-run` or `mode=commit`; and `orgs`.
-`member_wrapped_rewrapped` is the number of member-key envelopes re-sealed,
-or the number that would be re-sealed on a dry run. The skipped fields count
-member rows left unchanged. `member_failed` counts member rows that are not
-an envelope under the current root key and are not the previous encoding.
-A non-zero `member_failed` aborts the run before commit, including a dry run.
+and `member_failed`; `mode=dry-run` or `mode=commit`; and `orgs`. No key
+material is printed. `total scanned` is `key_versions` scanned, plus
+organization CA rows scanned, plus member-key envelopes that open under the
+current root key. Empty member rows and member rows in the previous encoding
+are not included in that total. `member_wrapped_rewrapped` is the number of
+member-key envelopes re-sealed, or the number that would be re-sealed on a
+dry run. The skipped fields count member rows left unchanged. `member_failed`
+counts member rows that are not an envelope under the current root key and
+are not the previous encoding. A non-zero `member_failed` aborts the run
+before commit, including a dry run.
 
 After a committed run, start miniKMS with the new root key
 (`MINIKMS_ROOT_KEY_FILE` or `MINIKMS_ROOT_KEY`). Keep the previous key file
@@ -119,18 +124,25 @@ Determine the state with two dry-runs. Use a valid, distinct trial key: a
 freshly generated 32-byte hex key in a mode-0600 file, different from both
 the old and new keys. Delete the trial key file afterwards.
 
+A check is conclusive only if it exits 0, reports zero failures, and
+`total scanned` is greater than 0. That total is `key_versions` scanned, plus
+organization CA rows scanned, plus member-key envelopes that open under the
+current root key. Empty member rows and member rows in the previous encoding
+do not count toward it. Exit 0 with zero failures and `total scanned=0`
+proves nothing: both keys can dry-run cleanly when no opening rows exist.
+
 Check A: dry-run with the old key as `MINIKMS_ROOT_KEY_FILE` and that trial
-key as `--new-key-file`. Only if Check A exits 0 with zero failures, the
-commit did not land; keep the old key.
+key as `--new-key-file`. Only if Check A is conclusive, the commit did not
+land; keep the old key.
 
 Check B: dry-run with the new key as `MINIKMS_ROOT_KEY_FILE` and the same
-valid, distinct trial key as `--new-key-file`. Only if Check B exits 0 with
-zero failures, the commit landed; start miniKMS with the new key.
+valid, distinct trial key as `--new-key-file`. Only if Check B is conclusive,
+the commit landed; start miniKMS with the new key.
 
-If neither check succeeds (DB errors, invalid trial key, partial failures),
-the outcome stays unknown. Keep miniKMS stopped, fix the check's cause and
-re-run, or restore from the pre-rotation DB dump with the old key per the
-rollback section.
+If both checks scan zero rows, or neither is conclusive, the outcome stays
+unknown. Keep miniKMS stopped and restore from the pre-rotation DB dump with
+the old key (or investigate). The rollback section describes restoring that
+dump.
 
 ## Rollback
 

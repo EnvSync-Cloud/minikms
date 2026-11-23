@@ -39,19 +39,26 @@ var ErrCommittedReportFailed = errors.New("rewrap COMMITTED but the report could
 // have committed before the acknowledgement was lost, so stored data may
 // or may not use the new root key. The error text is the recovery rule:
 // keep miniKMS stopped, and choose the old or new key only when that
-// key's dry-run check exits 0 with zero failures. If neither check
-// succeeds, the outcome stays unknown. A failed check is not evidence
-// that the commit did not land. Failures known to be before commit,
-// including validation, decrypt failures, and update errors that roll
-// back, are not this error. A dry-run does not commit and is not this error.
+// key's dry-run check is conclusive. A check is conclusive only if it
+// exits 0, reports zero failures, and scanned at least one in-scope row
+// (key_versions scanned, plus organization CA rows scanned, plus member-key
+// envelopes that open, is greater than zero). Empty member rows and member
+// rows in the previous encoding are not included.
+// If both checks scan zero rows, or neither is conclusive, the outcome
+// stays unknown. A failed check, and a dry-run that scanned no in-scope
+// rows, are not evidence that the commit did not land. Failures known to
+// be before commit, including validation, decrypt failures, and update
+// errors that roll back, are not this error. A dry-run does not commit
+// and is not this error.
 var ErrCommitOutcomeUnknown = errors.New("rewrap commit outcome is unknown; keep miniKMS stopped. " +
 	"Check A: dry-run with the old key as MINIKMS_ROOT_KEY_FILE and a valid, distinct trial key " +
 	"(a freshly generated 32-byte hex key in a mode-0600 file, different from both the old and new keys) as --new-key-file. " +
 	"Check B: dry-run with the new key as MINIKMS_ROOT_KEY_FILE and the same valid, distinct trial key as --new-key-file. " +
-	"Only if Check A exits 0 with zero failures: the commit did not land; keep the old key. " +
-	"Only if Check B exits 0 with zero failures: the commit landed; start miniKMS with the new key. " +
-	"If neither check succeeds (DB errors, invalid trial key, partial failures), the outcome stays unknown: " +
-	"keep miniKMS stopped, fix the check's cause and re-run, or restore from the pre-rotation DB dump with the old key per the rollback section. " +
+	"A check is conclusive only if it exits 0, reports zero failures, and scanned at least one in-scope row (key_versions + certificates scanned + opened member-key envelopes > 0, printed as total scanned). " +
+	"Only if Check A is conclusive: the commit did not land; keep the old key. " +
+	"Only if Check B is conclusive: the commit landed; start miniKMS with the new key. " +
+	"If both checks scan zero rows, or neither is conclusive, the outcome stays unknown: " +
+	"keep miniKMS stopped and restore from the pre-rotation DB dump with the old key (or investigate). " +
 	"Delete the trial key file afterwards")
 
 // Options configures one rewrap.
@@ -368,6 +375,17 @@ func (r report) failCount() int {
 	return n + r.members.failed
 }
 
+// scannedCount sums rows that open under the current root key.
+// Empty member rows and member rows in the previous encoding are not included.
+// The report prints this sum as "total scanned".
+func (r report) scannedCount() int {
+	n := r.keyVersions.scanned
+	for _, c := range r.certificates {
+		n += c.scanned
+	}
+	return n + r.members.opened
+}
+
 func (r *report) markRewrapped() {
 	r.keyVersions.rewrapped = r.keyVersions.scanned - r.keyVersions.failed
 	for i := range r.certificates {
@@ -530,6 +548,7 @@ func sameBytes(a, b []byte) bool {
 func writeReport(w io.Writer, rep report) error {
 	var b strings.Builder
 	_, _ = fmt.Fprintf(&b, "mode=%s orgs=%d\n", rep.mode, rep.orgs)
+	_, _ = fmt.Fprintf(&b, "total scanned=%d\n", rep.scannedCount())
 	_, _ = fmt.Fprintf(&b, "key_versions scanned=%d rewrapped=%d failed=%d\n",
 		rep.keyVersions.scanned, rep.keyVersions.rewrapped, rep.keyVersions.failed)
 	for _, c := range rep.certificates {

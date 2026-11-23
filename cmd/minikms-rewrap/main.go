@@ -118,10 +118,11 @@ func parseFlags(args []string, stderr io.Writer) (dryRun bool, confirm bool, new
 			"Check A: dry-run with the old key as MINIKMS_ROOT_KEY_FILE and a valid, distinct trial key "+
 			"(a freshly generated 32-byte hex key in a mode-0600 file, different from both the old and new keys) as --new-key-file. "+
 			"Check B: dry-run with the new key as MINIKMS_ROOT_KEY_FILE and the same valid, distinct trial key as --new-key-file. "+
-			"Only if Check A exits 0 with zero failures: the commit did not land; keep the old key. "+
-			"Only if Check B exits 0 with zero failures: the commit landed; start miniKMS with the new key. "+
-			"If neither check succeeds (DB errors, invalid trial key, partial failures), the outcome stays unknown: "+
-			"keep miniKMS stopped, fix the check's cause and re-run, or restore from the pre-rotation DB dump with the old key per the rollback section. "+
+			"A check is conclusive only if it exits 0, reports zero failures, and scanned at least one in-scope row (key_versions + certificates scanned + opened member-key envelopes > 0, printed as total scanned). "+
+			"Only if Check A is conclusive: the commit did not land; keep the old key. "+
+			"Only if Check B is conclusive: the commit landed; start miniKMS with the new key. "+
+			"If both checks scan zero rows, or neither is conclusive, the outcome stays unknown: "+
+			"keep miniKMS stopped and restore from the pre-rotation DB dump with the old key (or investigate). "+
 			"Delete the trial key file afterwards.\n\n")
 		fs.PrintDefaults()
 	}
