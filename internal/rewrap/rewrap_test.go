@@ -229,19 +229,7 @@ func TestCommitOutcomeUnknown(t *testing.T) {
 		if errors.Is(err, rewrap.ErrCommittedReportFailed) {
 			t.Fatal("uncertain commit reported as committed")
 		}
-		for _, phrase := range []string{
-			"do NOT start miniKMS yet",
-			"current root key",
-			"fail to decrypt with the old key",
-			"MINIKMS_ROOT_KEY_FILE",
-			"--new-key-file",
-			"the commit landed",
-			"otherwise it did not",
-		} {
-			if !strings.Contains(err.Error(), phrase) {
-				t.Fatalf("err=%q missing %q", err.Error(), phrase)
-			}
-		}
+		assertUnknownCommitGuidance(t, err.Error())
 		if out != "" {
 			t.Fatalf("report written despite uncertain commit: %q", out)
 		}
@@ -485,6 +473,38 @@ func TestLoadCurrentRootKey(t *testing.T) {
 func wantReport(mode string, kvRewrapped, kvFailed, certRewrapped, certFailed int) string {
 	return fmt.Sprintf("mode=%s orgs=2\nkey_versions scanned=3 rewrapped=%d failed=%d\ncertificates cert_type=%s scanned=2 rewrapped=%d failed=%d\n",
 		mode, kvRewrapped, kvFailed, rewrap.CertTypeOrgIntermediateCA, certRewrapped, certFailed)
+}
+
+func assertUnknownCommitGuidance(t *testing.T, text string) {
+	t.Helper()
+	if !strings.Contains(strings.ToLower(text), "keep minikms stopped") {
+		t.Fatalf("text=%q missing keep miniKMS stopped", text)
+	}
+	for _, phrase := range []string{
+		"distinct trial key",
+		"MINIKMS_ROOT_KEY_FILE",
+		"--new-key-file",
+		"Check A",
+		"Check B",
+		"exits 0 with zero failures",
+		"the commit did not land",
+		"the commit landed",
+		"If neither check succeeds",
+		"the outcome stays unknown",
+		"Delete the trial key file afterwards",
+	} {
+		if !strings.Contains(text, phrase) {
+			t.Fatalf("text=%q missing %q", text, phrase)
+		}
+	}
+	for _, phrase := range []string{
+		"otherwise it did not",
+		"any different file",
+	} {
+		if strings.Contains(text, phrase) {
+			t.Fatalf("text=%q contains %q", text, phrase)
+		}
+	}
 }
 
 func assertNoKeyHex(t *testing.T, text string, keys ...[]byte) {

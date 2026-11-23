@@ -45,20 +45,10 @@ func TestHandleExitCodes(t *testing.T) {
 		t.Fatalf("unknown code=%d stderr=%q", code, stderr.String())
 	}
 	unknownText := stderr.String()
-	for _, phrase := range []string{
-		"minikms-rewrap:",
-		"do NOT start miniKMS yet",
-		"current root key",
-		"fail to decrypt with the old key",
-		"MINIKMS_ROOT_KEY_FILE",
-		"--new-key-file",
-		"the commit landed",
-		"otherwise it did not",
-	} {
-		if !strings.Contains(unknownText, phrase) {
-			t.Fatalf("stderr=%q missing %q", unknownText, phrase)
-		}
+	if !strings.Contains(unknownText, "minikms-rewrap:") {
+		t.Fatalf("stderr=%q", unknownText)
 	}
+	assertUnknownCommitGuidance(t, unknownText)
 	if strings.Contains(unknownText, "COMMITTED") || strings.Contains(unknownText, "must now be started with the new root key") {
 		t.Fatalf("unknown outcome looks committed: %q", unknownText)
 	}
@@ -100,9 +90,7 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if !strings.Contains(usage, "Exit status 4") || !strings.Contains(usage, "unknown") {
 		t.Fatalf("usage missing status 4: %s", usage)
 	}
-	if !strings.Contains(usage, "do NOT start miniKMS yet") && !strings.Contains(usage, "Do not start miniKMS yet") {
-		t.Fatalf("usage missing recovery guidance: %s", usage)
-	}
+	assertUnknownCommitGuidance(t, usage)
 }
 
 func TestExecuteRefusesBeforeDatabase(t *testing.T) {
@@ -160,6 +148,38 @@ func TestExecuteRefusesBeforeDatabase(t *testing.T) {
 	t.Cleanup(func() { crypto.ZeroizeBytes(loaded) })
 	if subtle.ConstantTimeCompare(loaded, replacement) != 1 {
 		t.Fatal("replacement file was not loaded")
+	}
+}
+
+func assertUnknownCommitGuidance(t *testing.T, text string) {
+	t.Helper()
+	if !strings.Contains(strings.ToLower(text), "keep minikms stopped") {
+		t.Fatalf("text=%q missing keep miniKMS stopped", text)
+	}
+	for _, phrase := range []string{
+		"distinct trial key",
+		"MINIKMS_ROOT_KEY_FILE",
+		"--new-key-file",
+		"Check A",
+		"Check B",
+		"exits 0 with zero failures",
+		"the commit did not land",
+		"the commit landed",
+		"If neither check succeeds",
+		"the outcome stays unknown",
+		"Delete the trial key file afterwards",
+	} {
+		if !strings.Contains(text, phrase) {
+			t.Fatalf("text=%q missing %q", text, phrase)
+		}
+	}
+	for _, phrase := range []string{
+		"otherwise it did not",
+		"any different file",
+	} {
+		if strings.Contains(text, phrase) {
+			t.Fatalf("text=%q contains %q", text, phrase)
+		}
 	}
 }
 

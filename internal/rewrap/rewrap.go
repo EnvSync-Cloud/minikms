@@ -36,10 +36,22 @@ var ErrCommittedReportFailed = errors.New("rewrap COMMITTED but the report could
 // ErrCommitOutcomeUnknown is returned when Commit itself returns an error
 // on a writing run. The commit error is wrapped. The server may already
 // have committed before the acknowledgement was lost, so stored data may
-// or may not use the new root key. Failures known to be before commit,
+// or may not use the new root key. The error text is the recovery rule:
+// keep miniKMS stopped, and choose the old or new key only when that
+// key's dry-run check exits 0 with zero failures. If neither check
+// succeeds, the outcome stays unknown. A failed check is not evidence
+// that the commit did not land. Failures known to be before commit,
 // including validation, decrypt failures, and update errors that roll
 // back, are not this error. A dry-run does not commit and is not this error.
-var ErrCommitOutcomeUnknown = errors.New("rewrap commit outcome is unknown; do NOT start miniKMS yet. Determine the state by running a dry-run with the current root key. If rows fail to decrypt with the old key but a dry-run using the new key file as MINIKMS_ROOT_KEY_FILE and any different file as --new-key-file succeeds, the commit landed; otherwise it did not")
+var ErrCommitOutcomeUnknown = errors.New("rewrap commit outcome is unknown; keep miniKMS stopped. " +
+	"Check A: dry-run with the old key as MINIKMS_ROOT_KEY_FILE and a valid, distinct trial key " +
+	"(a freshly generated 32-byte hex key in a mode-0600 file, different from both the old and new keys) as --new-key-file. " +
+	"Check B: dry-run with the new key as MINIKMS_ROOT_KEY_FILE and the same valid, distinct trial key as --new-key-file. " +
+	"Only if Check A exits 0 with zero failures: the commit did not land; keep the old key. " +
+	"Only if Check B exits 0 with zero failures: the commit landed; start miniKMS with the new key. " +
+	"If neither check succeeds (DB errors, invalid trial key, partial failures), the outcome stays unknown: " +
+	"keep miniKMS stopped, fix the check's cause and re-run, or restore from the pre-rotation DB dump with the old key per the rollback section. " +
+	"Delete the trial key file afterwards")
 
 // Options configures one rewrap.
 type Options struct {

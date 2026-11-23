@@ -112,7 +112,15 @@ func parseFlags(args []string, stderr io.Writer) (dryRun bool, confirm bool, new
 		_, _ = fmt.Fprintf(out, "HKDF salt: MINIKMS_HKDF_SALT when the server sets it\n")
 		_, _ = fmt.Fprintf(out, "Exit status 1: the rewrap was not committed.\n")
 		_, _ = fmt.Fprintf(out, "Exit status 3: the rewrap committed and the report could not be written. miniKMS must now be started with the new root key.\n")
-		_, _ = fmt.Fprintf(out, "Exit status 4: the commit outcome is unknown. Do not start miniKMS yet. Determine the state by running a dry-run with the current root key. If rows fail to decrypt with the old key but a dry-run using the new key file as MINIKMS_ROOT_KEY_FILE and any different file as --new-key-file succeeds, the commit landed; otherwise it did not.\n\n")
+		_, _ = fmt.Fprintf(out, "Exit status 4: the commit outcome is unknown. Keep miniKMS stopped. "+
+			"Check A: dry-run with the old key as MINIKMS_ROOT_KEY_FILE and a valid, distinct trial key "+
+			"(a freshly generated 32-byte hex key in a mode-0600 file, different from both the old and new keys) as --new-key-file. "+
+			"Check B: dry-run with the new key as MINIKMS_ROOT_KEY_FILE and the same valid, distinct trial key as --new-key-file. "+
+			"Only if Check A exits 0 with zero failures: the commit did not land; keep the old key. "+
+			"Only if Check B exits 0 with zero failures: the commit landed; start miniKMS with the new key. "+
+			"If neither check succeeds (DB errors, invalid trial key, partial failures), the outcome stays unknown: "+
+			"keep miniKMS stopped, fix the check's cause and re-run, or restore from the pre-rotation DB dump with the old key per the rollback section. "+
+			"Delete the trial key file afterwards.\n\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {

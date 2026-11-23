@@ -98,11 +98,24 @@ could not be written. Exit status 3 means the rewrap committed and the count
 report could not be written. The command prints that on stderr. miniKMS must
 now be started with the new root key. Exit status 4 means the commit outcome
 is unknown. Commit itself returned an error, and the server may have
-committed before the acknowledgement was lost. Do not start miniKMS yet.
-Determine the state by running a dry-run with the current root key. If rows
-fail to decrypt with the old key but a dry-run using the new key file as
-MINIKMS_ROOT_KEY_FILE and any different file as --new-key-file succeeds, the
-commit landed; otherwise it did not.
+committed before the acknowledgement was lost. Keep miniKMS stopped.
+
+Determine the state with two dry-runs. Use a valid, distinct trial key: a
+freshly generated 32-byte hex key in a mode-0600 file, different from both
+the old and new keys. Delete the trial key file afterwards.
+
+Check A: dry-run with the old key as `MINIKMS_ROOT_KEY_FILE` and that trial
+key as `--new-key-file`. Only if Check A exits 0 with zero failures, the
+commit did not land; keep the old key.
+
+Check B: dry-run with the new key as `MINIKMS_ROOT_KEY_FILE` and the same
+valid, distinct trial key as `--new-key-file`. Only if Check B exits 0 with
+zero failures, the commit landed; start miniKMS with the new key.
+
+If neither check succeeds (DB errors, invalid trial key, partial failures),
+the outcome stays unknown. Keep miniKMS stopped, fix the check's cause and
+re-run, or restore from the pre-rotation DB dump with the old key per the
+rollback section.
 
 ## Rollback
 
