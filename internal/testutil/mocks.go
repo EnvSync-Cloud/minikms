@@ -316,10 +316,15 @@ func cloneEscrowShares(shares []*escrow.Share) []*escrow.Share {
 	return result
 }
 
+// CertificateStatusFunc returns the certificates.status for a serial.
+// found is false when no certificate row exists.
+type CertificateStatusFunc func(ctx context.Context, serial string) (status string, found bool, err error)
+
 // MockTokenRegistry is an in-memory implementation of auth.TokenRegistry for testing.
 type MockTokenRegistry struct {
-	mu     sync.RWMutex
-	tokens map[string]*auth.TokenEntry // keyed by JTI
+	mu         sync.RWMutex
+	tokens     map[string]*auth.TokenEntry // keyed by JTI
+	certStatus CertificateStatusFunc
 }
 
 func NewMockTokenRegistry() *MockTokenRegistry {
@@ -336,14 +341,40 @@ func (m *MockTokenRegistry) StoreToken(_ context.Context, entry *auth.TokenEntry
 	return nil
 }
 
-func (m *MockTokenRegistry) GetToken(_ context.Context, jti string) (*auth.TokenEntry, error) {
+// BindCertificateStatus makes GetToken fill CertStatus the way PostgresStore does.
+func (m *MockTokenRegistry) BindCertificateStatus(fn CertificateStatusFunc) {
+	m.mu.Lock()
+	m.certStatus = fn
+	m.mu.Unlock()
+}
+
+func (m *MockTokenRegistry) GetToken(ctx context.Context, jti string) (*auth.TokenEntry, error) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	entry, ok := m.tokens[jti]
 	if !ok {
+		m.mu.RUnlock()
 		return nil, nil
 	}
 	cp := *entry
+	lookup := m.certStatus
+	m.mu.RUnlock()
+
+	if cp.CertSerial == "" {
+		cp.CertStatus = ""
+		return &cp, nil
+	}
+	if lookup == nil {
+		return &cp, nil
+	}
+	status, found, err := lookup(ctx, cp.CertSerial)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		cp.CertStatus = ""
+		return &cp, nil
+	}
+	cp.CertStatus = status
 	return &cp, nil
 }
 
@@ -359,6 +390,22 @@ func (m *MockTokenRegistry) RevokeToken(_ context.Context, jti string) error {
 }
 
 func (m *MockTokenRegistry) CleanupExpired(_ context.Context) error {
+	return nil
+}
+
+// RevokeTokensByCertSerial marks every session for certSerial revoked.
+// An empty serial is rejected so non-cert rows are not updated.
+func (m *MockTokenRegistry) RevokeTokensByCertSerial(_ context.Context, certSerial string) error {
+	if certSerial == "" {
+		return fmt.Errorf("certificate serial is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, entry := range m.tokens {
+		if entry.CertSerial == certSerial {
+			entry.Revoked = true
+		}
+	}
 	return nil
 }
 
@@ -390,10 +437,13 @@ func SetupTestKMSStack(rootKeyHex string) (
 
 // MockPKICertStore is an in-memory implementation of pkistore.Store for testing.
 type MockPKICertStore struct {
-	mu    sync.RWMutex
-	certs map[string]*CertRecord // keyed by serial
-	orgCA map[string]*CertRecord // keyed by orgID
-	crls  map[string][]CRLEntryRecord
+	mu           sync.RWMutex
+	certs        map[string]*CertRecord // keyed by serial
+	orgCA        map[string]*CertRecord // keyed by orgID
+	crls         map[string][]CRLEntryRecord
+	tokenRevoker interface {
+		RevokeTokensByCertSerial(ctx context.Context, certSerial string) error
+	}
 }
 
 // CertRecord mirrors pkistore.CertRecord to avoid circular imports.
@@ -489,6 +539,50 @@ func (m *MockPKICertStore) UpdateCertificateStatus(_ context.Context, serial, st
 		return fmt.Errorf("cert not found: %s", serial)
 	}
 	rec.Status = status
+	return nil
+}
+
+// BindTokenRevoker ends sessions for a serial inside RevokeCertificate.
+func (m *MockPKICertStore) BindTokenRevoker(revoker interface {
+	RevokeTokensByCertSerial(ctx context.Context, certSerial string) error
+}) {
+	m.mu.Lock()
+	m.tokenRevoker = revoker
+	m.mu.Unlock()
+}
+
+// RevokeCertificate updates the certificate, records the CRL entry, and revokes
+// sessions for that serial. A token-revoke error restores the certificate row.
+func (m *MockPKICertStore) RevokeCertificate(ctx context.Context, serial string, entry *CRLEntryRecord) error {
+	if serial == "" || entry == nil || entry.CertSerial != serial {
+		return fmt.Errorf("certificate serial is required")
+	}
+
+	m.mu.Lock()
+	rec, ok := m.certs[serial]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("certificate not found")
+	}
+	prevStatus := rec.Status
+	rec.Status = "revoked"
+	m.crls[entry.IssuerSerial] = append(m.crls[entry.IssuerSerial], *entry)
+	revoker := m.tokenRevoker
+	m.mu.Unlock()
+
+	if revoker == nil {
+		return nil
+	}
+	if err := revoker.RevokeTokensByCertSerial(ctx, serial); err != nil {
+		m.mu.Lock()
+		rec.Status = prevStatus
+		entries := m.crls[entry.IssuerSerial]
+		if n := len(entries); n > 0 {
+			m.crls[entry.IssuerSerial] = entries[:n-1]
+		}
+		m.mu.Unlock()
+		return err
+	}
 	return nil
 }
 
