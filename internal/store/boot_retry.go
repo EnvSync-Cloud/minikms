@@ -90,6 +90,9 @@ func openPostgres(ctx context.Context, connString string, policy retryPolicy) (*
 		return nil
 	})
 	if err != nil {
+		if opened != nil {
+			opened.Close()
+		}
 		return nil, err
 	}
 	return opened, nil
@@ -112,6 +115,9 @@ func openRedis(ctx context.Context, redisURL string, policy retryPolicy) (*Redis
 		return nil
 	})
 	if err != nil {
+		if opened != nil {
+			_ = opened.Close()
+		}
 		return nil, err
 	}
 	return opened, nil
@@ -119,9 +125,9 @@ func openRedis(ctx context.Context, redisURL string, policy retryPolicy) (*Redis
 
 // retry calls op until it succeeds or the policy budget elapses. The first
 // failure is logged and retried. Configuration errors are returned as-is.
-// An attempt is not started once the deadline has passed. op receives the
-// caller's context: a successful pool keeps that context, and canceling a
-// per-attempt child would close it. The store bounds each ping itself.
+// No attempt starts after the deadline. The context passed to op expires at
+// the deadline, and a nil result that arrives after the deadline is still
+// a failure. Callers must close a store op opened on that late nil.
 func retry(ctx context.Context, name string, policy retryPolicy, op func(context.Context) error) error {
 	policy = policy.normalize()
 	start := policy.Now()
@@ -143,11 +149,18 @@ func retry(ctx context.Context, name string, policy retryPolicy, op func(context
 			}
 			return err
 		}
+		remaining := deadline.Sub(policy.Now())
+		if remaining <= 0 {
+			return unavailable(lastErr)
+		}
+		// Bound this attempt to the time still left. A ping that would
+		// complete after the deadline is canceled here.
+		opCtx, cancel := context.WithTimeout(ctx, remaining)
+		lastErr = op(opCtx)
+		cancel()
 		if deadline.Sub(policy.Now()) <= 0 {
 			return unavailable(lastErr)
 		}
-
-		lastErr = op(ctx)
 		if lastErr == nil {
 			if attempt > 1 {
 				policy.Logf("%s connected after %d attempts", name, attempt)
@@ -161,7 +174,7 @@ func retry(ctx context.Context, name string, policy retryPolicy, op func(context
 			return fmt.Errorf("%s connect canceled: %w", name, lastErr)
 		}
 
-		remaining := deadline.Sub(policy.Now())
+		remaining = deadline.Sub(policy.Now())
 		if remaining <= 0 {
 			return unavailable(lastErr)
 		}

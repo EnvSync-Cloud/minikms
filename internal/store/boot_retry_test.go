@@ -97,6 +97,28 @@ func TestRetry_ExponentialBackoffUntilTimeout(t *testing.T) {
 	}
 }
 
+func TestRetry_SuccessAfterDeadlineIsFailure(t *testing.T) {
+	calls := 0
+	err := retry(context.Background(), "PostgreSQL", retryPolicy{
+		Timeout:      150 * time.Millisecond,
+		InitialDelay: 20 * time.Millisecond,
+		MaxDelay:     20 * time.Millisecond,
+	}, func(ctx context.Context) error {
+		calls++
+		if calls == 1 {
+			return errors.New("connection refused")
+		}
+		<-ctx.Done()
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "PostgreSQL unavailable after") {
+		t.Fatalf("err = %v", err)
+	}
+	if calls < 2 {
+		t.Fatalf("calls = %d, want at least 2", calls)
+	}
+}
+
 func TestRetry_SucceedsAfterTransientFailures(t *testing.T) {
 	var sleeps []time.Duration
 	calls := 0
