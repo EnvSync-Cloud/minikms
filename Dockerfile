@@ -14,6 +14,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /minikms ./cmd/minikms \
 
 FROM alpine:3.20
 
+LABEL org.opencontainers.image.description="A lightweight, tenant-aware Key Management Service built in Go"
+
 RUN apk add --no-cache ca-certificates tzdata netcat-openbsd
 RUN adduser -D -g '' minikms
 
