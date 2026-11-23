@@ -57,6 +57,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Labels only. Published tags come from release-bump.
+      # The description is set here so a release does not publish an empty
+      # org.opencontainers.image.description.
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -66,6 +68,8 @@ jobs:
             latest=false
           tags: |
             type=sha
+          labels: |
+            org.opencontainers.image.description=A lightweight, tenant-aware Key Management Service built in Go
 
       - name: Build and push
         uses: docker/build-push-action@v6
