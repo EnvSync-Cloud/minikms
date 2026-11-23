@@ -387,6 +387,23 @@ minikms/
 └── go.mod
 ```
 
+## Releases
+
+`VERSION` at the repository root is the release version. It contains `X.Y.Z` or `X.Y.Z-rc.N`. This series starts at `0.2.0`.
+
+```bash
+make bump SPEC=rc        # 0.2.0 -> 0.2.0-rc.1; a later rc increments N
+make bump SPEC=stable    # 0.2.0-rc.N -> 0.2.0
+make bump SPEC=patch     # next stable patch from the X.Y.Z core
+make bump SPEC=0.3.0     # set an explicit version
+```
+
+`patch`, `minor`, and `major` bump the numeric core and write a stable version. On `0.2.0-rc.1`, `patch` writes `0.2.1`. Use `stable` to drop the rc suffix and keep the same core.
+
+Commit `VERSION`, then push a tag that is `v` plus the file contents, such as `v0.2.0` or `v0.2.0-rc.1`. The release workflow accepts those tags. It checks `VERSION` against the tag, builds `linux/amd64` and `linux/arm64` images, and creates a GitHub release.
+
+A stable tag publishes image tags `X.Y.Z`, `X.Y`, `latest`, `stable`, and `sha-<short>`, and is marked as the latest GitHub release. An rc tag publishes only `X.Y.Z-rc.N` and `sha-<short>`. That image is a prerelease and does not move `latest` or `stable`.
+
 ## Security Considerations
 
 - The **root key** is the most sensitive piece of data. It should be injected via a secure mechanism (e.g., Kubernetes secrets, cloud KMS unsealing) and never written to disk or logs.

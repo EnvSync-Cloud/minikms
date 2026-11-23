@@ -2,11 +2,16 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    tags:
+      - "v*.*.*"
 
 permissions:
-  contents: read
+  contents: write
   packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -14,6 +19,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Verify VERSION matches tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: go run ./cmd/release-bump verify -tag "$RELEASE_TAG" -file VERSION
+
+      - name: Compute image tags
+        id: rel
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          short="${GITHUB_SHA::7}"
+          IMAGE_LC="$(printf '%s' "$IMAGE" | tr '[:upper:]' '[:lower:]')"
+          go run ./cmd/release-bump tags \
+            -tag "$RELEASE_TAG" \
+            -image "$IMAGE_LC" \
+            -sha "$short" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -28,14 +56,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Labels only. Published tags come from release-bump.
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: |
+            latest=false
           tags: |
             type=sha
-            type=raw,value=latest
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -43,7 +73,26 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ steps.rel.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ steps.rel.outputs.prerelease }}
+        run: |
+          case "$PRERELEASE" in
+            true)
+              gh release create "$RELEASE_TAG" --verify-tag --generate-notes --prerelease --latest=false
+              ;;
+            false)
+              gh release create "$RELEASE_TAG" --verify-tag --generate-notes --latest
+              ;;
+            *)
+              echo "unexpected prerelease value" >&2
+              exit 1
+              ;;
+          esac
