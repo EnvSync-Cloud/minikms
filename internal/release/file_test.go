@@ -181,12 +181,23 @@ func TestVerifyTag(t *testing.T) {
 			t.Fatal("VerifyTag accepted an unprefixed tag")
 		}
 	})
+
+	t.Run("trailing_dash", func(t *testing.T) {
+		t.Parallel()
+		path := filepath.Join(t.TempDir(), "VERSION")
+		if err := os.WriteFile(path, []byte("0.2.0\n"), 0o644); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		if err := VerifyTag(path, "v0.2.0-"); err == nil {
+			t.Fatal("VerifyTag accepted a trailing dash")
+		}
+	})
 }
 
 func TestRepoVersionFile(t *testing.T) {
 	t.Parallel()
 
-	t.Run("version_file_is_0.2.0", func(t *testing.T) {
+	t.Run("version_file_is_canonical", func(t *testing.T) {
 		t.Parallel()
 		_, file, _, ok := runtime.Caller(0)
 		if !ok {
@@ -197,15 +208,16 @@ func TestRepoVersionFile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read VERSION: %v", err)
 		}
-		if string(raw) != "0.2.0\n" {
-			t.Fatalf("VERSION = %q, want 0.2.0 plus newline", raw)
+		if len(raw) < 2 || raw[len(raw)-1] != '\n' || raw[len(raw)-2] == '\n' {
+			t.Fatalf("VERSION = %q, want exactly one trailing newline", raw)
 		}
-		got, err := ReadVersionFile(path)
+		body := string(raw[:len(raw)-1])
+		parsed, err := Parse(body)
 		if err != nil {
-			t.Fatalf("ReadVersionFile: %v", err)
+			t.Fatalf("Parse VERSION: %v", err)
 		}
-		if got != "0.2.0" {
-			t.Fatalf("parsed VERSION = %q", got)
+		if parsed.String() != body {
+			t.Fatalf("VERSION body = %q, want canonical %s", body, parsed)
 		}
 	})
 }

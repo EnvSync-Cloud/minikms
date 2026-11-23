@@ -56,6 +56,7 @@ func TestParse(t *testing.T) {
 		"v0.2.0-rc.1",
 		"-1.2.3",
 		"1.2.3-rc.1.2",
+		"0.2.0-",
 	}
 	for _, in := range invalid {
 		t.Run("invalid_"+fixtureName(in), func(t *testing.T) {

@@ -106,6 +106,7 @@ func TestImageTags(t *testing.T) {
 		{name: "leading_zero", tag: "v01.2.3", img: image, sha: sha},
 		{name: "empty_tag", tag: "", img: image, sha: sha},
 		{name: "empty_image", tag: "v0.2.0", img: "", sha: sha},
+		{name: "uppercase_image", tag: "v0.2.0", img: "ghcr.io/EnvSync-Cloud/minikms", sha: sha},
 		{name: "image_whitespace", tag: "v0.2.0", img: "ghcr.io/acme/minikms ", sha: sha},
 		{name: "short_sha_too_short", tag: "v0.2.0", img: image, sha: "abc123"},
 		{name: "short_sha_too_long", tag: "v0.2.0", img: image, sha: strings.Repeat("a", 41)},

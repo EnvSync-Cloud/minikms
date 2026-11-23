@@ -14,6 +14,7 @@ type ImagePlan struct {
 // ImageTags classifies tag and returns the image references to publish.
 // shortSHA is 7 to 40 hexadecimal characters and is copied after "sha-".
 // image is the repository prefix without a tag, such as ghcr.io/org/minikms.
+// Uppercase letters are rejected.
 func ImageTags(tag, image, shortSHA string) (ImagePlan, error) {
 	if err := validateImage(image); err != nil {
 		return ImagePlan{}, err
@@ -79,7 +80,7 @@ func versionFromGitTag(tag string) (Version, error) {
 }
 
 func validateImage(image string) error {
-	if image == "" || strings.ContainsAny(image, " \t\r\n") {
+	if image == "" || strings.ContainsAny(image, " \t\r\n") || image != strings.ToLower(image) {
 		return fmt.Errorf("invalid image %q", image)
 	}
 	return nil

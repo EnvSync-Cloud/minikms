@@ -37,9 +37,10 @@ jobs:
           IMAGE: ghcr.io/${{ github.repository }}
         run: |
           short="${GITHUB_SHA::7}"
+          IMAGE_LC="$(printf '%s' "$IMAGE" | tr '[:upper:]' '[:lower:]')"
           go run ./cmd/release-bump tags \
             -tag "$RELEASE_TAG" \
-            -image "$IMAGE" \
+            -image "$IMAGE_LC" \
             -sha "$short" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU

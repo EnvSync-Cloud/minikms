@@ -112,15 +112,18 @@ func parseVersion(s string) (Version, bool) {
 	}
 	core := s
 	rcPart := ""
+	hasRC := false
 	if dash := strings.IndexByte(s, '-'); dash >= 0 {
 		core = s[:dash]
 		rcPart = s[dash+1:]
+		hasRC = true
 	}
 	major, minor, patch, ok := splitCore(core)
 	if !ok {
 		return Version{}, false
 	}
-	if rcPart == "" {
+	// A dash must be followed by rc.N. A trailing dash, as in 0.2.0-, is invalid.
+	if !hasRC {
 		return Version{Major: major, Minor: minor, Patch: patch}, true
 	}
 	rc, ok := parseRC(rcPart)
