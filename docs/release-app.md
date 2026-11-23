@@ -1,6 +1,6 @@
 # Release app
 
-The release bump workflow (`.github/workflows/release-bump.yml`) pushes the rc bump commit and the annotated rc tag with a GitHub App token. The workflow `GITHUB_TOKEN` stays read-only. A tag push from this app is what starts [`.github/workflows/release.yaml`](../.github/workflows/release.yaml). A push made with `GITHUB_TOKEN` does not start that workflow.
+The release bump workflow (`.github/workflows/release-bump.yml`) pushes the rc bump commit and the annotated rc tag with a GitHub App token. The workflow `GITHUB_TOKEN` stays read-only. The guard uses it to read the merged pull request. A tag push from this app is what starts [`.github/workflows/release.yaml`](../.github/workflows/release.yaml). A push made with `GITHUB_TOKEN` does not start that workflow.
 
 Install the app on `EnvSync-Cloud/minikms` only.
 
@@ -26,7 +26,7 @@ Repository secret:
 | --- | --- |
 | `RELEASE_APP_PRIVATE_KEY` | GitHub App private key (PEM) |
 
-A merged pull request into `dev` runs the bump workflow. It writes the next `X.Y.Z-rc.N` into `VERSION`, commits that file, and pushes the annotated tag `vX.Y.Z-rc.N`. `workflow_dispatch` is the owner-run path for an rc of the current `dev` tip. The manual rc fallback is owner-only: set `VERSION` to the rc version with `make bump SPEC=X.Y.Z-rc.N`, commit and push that change to `dev` through the normal path, then create the matching annotated tag on that commit and push the tag. The release workflow checks that `VERSION` matches the tag.
+A merged pull request into `dev` pushes a merge commit to `dev`. That push starts the bump workflow. The guard skips the release app's own bump push. For any other push it looks up the merged pull request for that commit, and one merged pull request into `dev` whose merge commit is that sha continues to the bump. The bump writes the next `X.Y.Z-rc.N` into `VERSION`, commits that file, and pushes the annotated tag `vX.Y.Z-rc.N`. `workflow_dispatch` is the owner-run path for an rc of the current `dev` tip. The manual rc fallback is owner-only: set `VERSION` to the rc version with `make bump SPEC=X.Y.Z-rc.N`, commit and push that change to `dev` through the normal path, then create the matching annotated tag on that commit and push the tag. The release workflow checks that `VERSION` matches the tag.
 
 When `RELEASE_APP_ID` is unset, the workflow warns `release app not configured; no rc created` and exits successfully.
 
