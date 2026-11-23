@@ -19,9 +19,21 @@ func NewRedisStore(ctx context.Context, redisURL string) (*RedisStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse Redis URL: %w", err)
 	}
+	// Negative timeouts mean "block forever" in go-redis, and a multi-minute
+	// URL timeout would consume the startup budget in one ping. Unset
+	// read/write timeouts stay 0 so NewClient keeps its shorter defaults.
+	// Context deadlines are ignored unless ContextTimeoutEnabled is set, and
+	// the URL has no switch that can turn it back off.
 	if opts.DialTimeout <= 0 || opts.DialTimeout > bootPingTimeout {
 		opts.DialTimeout = bootPingTimeout
 	}
+	if opts.ReadTimeout < 0 || opts.ReadTimeout > bootPingTimeout {
+		opts.ReadTimeout = bootPingTimeout
+	}
+	if opts.WriteTimeout < 0 || opts.WriteTimeout > bootPingTimeout {
+		opts.WriteTimeout = bootPingTimeout
+	}
+	opts.ContextTimeoutEnabled = true
 
 	client := redis.NewClient(opts)
 	pingCtx, pingCancel := context.WithTimeout(ctx, bootPingTimeout)

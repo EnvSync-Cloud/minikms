@@ -119,6 +119,9 @@ func openRedis(ctx context.Context, redisURL string, policy retryPolicy) (*Redis
 
 // retry calls op until it succeeds or the policy budget elapses. The first
 // failure is logged and retried. Configuration errors are returned as-is.
+// An attempt is not started once the deadline has passed. op receives the
+// caller's context: a successful pool keeps that context, and canceling a
+// per-attempt child would close it. The store bounds each ping itself.
 func retry(ctx context.Context, name string, policy retryPolicy, op func(context.Context) error) error {
 	policy = policy.normalize()
 	start := policy.Now()
@@ -126,12 +129,22 @@ func retry(ctx context.Context, name string, policy retryPolicy, op func(context
 	delay := policy.InitialDelay
 	var lastErr error
 
+	unavailable := func(err error) error {
+		if err == nil {
+			return fmt.Errorf("%s unavailable after %s", name, policy.Timeout)
+		}
+		return fmt.Errorf("%s unavailable after %s: %w", name, policy.Timeout, err)
+	}
+
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			if lastErr != nil {
 				return fmt.Errorf("%s connect canceled: %w", name, lastErr)
 			}
 			return err
+		}
+		if deadline.Sub(policy.Now()) <= 0 {
+			return unavailable(lastErr)
 		}
 
 		lastErr = op(ctx)
@@ -150,7 +163,7 @@ func retry(ctx context.Context, name string, policy retryPolicy, op func(context
 
 		remaining := deadline.Sub(policy.Now())
 		if remaining <= 0 {
-			return fmt.Errorf("%s unavailable after %s: %w", name, policy.Timeout, lastErr)
+			return unavailable(lastErr)
 		}
 
 		sleepFor := delay

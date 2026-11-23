@@ -63,8 +63,8 @@ func TestRetry_ExponentialBackoffUntilTimeout(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "PostgreSQL unavailable after "+BootRetryTimeout.String()) {
 		t.Fatalf("err = %v", err)
 	}
-	if calls != len(sleeps)+1 {
-		t.Fatalf("calls = %d, sleeps = %d", calls, len(sleeps))
+	if calls != len(sleeps) {
+		t.Fatalf("calls = %d, sleeps = %d; an attempt started after the budget", calls, len(sleeps))
 	}
 	if len(sleeps) < 2 {
 		t.Fatalf("sleeps = %v", sleeps)
@@ -265,6 +265,89 @@ func assertRefusedRetries(t *testing.T, open func(context.Context, int, retryPol
 	if !strings.Contains(joined, name+" ping failed (attempt 1)") || !strings.Contains(joined, name+" ping failed (attempt 2)") {
 		t.Fatalf("retry log:\n%s\nerr=%v", joined, err)
 	}
+}
+
+func TestNewPostgresStore_CapsExplicitConnectTimeout(t *testing.T) {
+	port := blackhole(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	_, err := NewPostgresStore(ctx, fmt.Sprintf("postgres://minikms_test@127.0.0.1:%d/minikms_test?sslmode=disable&connect_timeout=30", port))
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected ping failure")
+	}
+	if elapsed > 12*time.Second {
+		t.Fatalf("connect_timeout=30 took %s, want a cap of %s", elapsed, bootPingTimeout)
+	}
+
+	start = time.Now()
+	_, err = NewPostgresStore(ctx, fmt.Sprintf("postgres://minikms_test@127.0.0.1:%d/minikms_test?sslmode=disable&connect_timeout=1", port))
+	elapsed = time.Since(start)
+	if err == nil {
+		t.Fatal("expected ping failure")
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("connect_timeout=1 took %s, want the shorter configured limit preserved", elapsed)
+	}
+}
+
+func TestNewRedisStore_CapsExplicitReadTimeout(t *testing.T) {
+	port := blackhole(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	for _, raw := range []string{"30s", "0"} {
+		errCh := make(chan error, 1)
+		start := time.Now()
+		go func() {
+			_, err := NewRedisStore(ctx, fmt.Sprintf("redis://127.0.0.1:%d/0?read_timeout=%s", port, raw))
+			errCh <- err
+		}()
+		select {
+		case err := <-errCh:
+			elapsed := time.Since(start)
+			if err == nil {
+				t.Fatalf("read_timeout=%s: expected ping failure", raw)
+			}
+			if elapsed > 12*time.Second {
+				t.Fatalf("read_timeout=%s took %s, want a cap of %s", raw, elapsed, bootPingTimeout)
+			}
+		case <-time.After(12 * time.Second):
+			t.Fatalf("read_timeout=%s still blocked after 12s", raw)
+		}
+	}
+}
+
+func blackhole(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var conns []net.Conn
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, conn)
+			mu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		_ = ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+	})
+	return ln.Addr().(*net.TCPAddr).Port
 }
 
 func refusedPort(t *testing.T) int {
