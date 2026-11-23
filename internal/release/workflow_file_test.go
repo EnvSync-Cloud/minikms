@@ -34,6 +34,9 @@ func TestReleaseBumpWorkflowFile(t *testing.T) {
 	if !strings.Contains(text, "group: release-bump-dev") {
 		t.Fatal("missing concurrency group release-bump-dev")
 	}
+	if !strings.Contains(text, "queue: max") {
+		t.Fatal("concurrency queue must be max")
+	}
 	if !strings.Contains(text, "cancel-in-progress: false") {
 		t.Fatal("concurrency cancel-in-progress must be false")
 	}

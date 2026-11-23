@@ -123,6 +123,7 @@ func versionHigher(left, right release.Version) bool {
 }
 
 // splitNullMessages splits git log --format=%B%x00 output into commit messages.
+// CR and LF are trimmed from both ends so a leading newline does not hide the subject.
 func splitNullMessages(log string) []string {
 	if log == "" {
 		return nil
@@ -130,7 +131,7 @@ func splitNullMessages(log string) []string {
 	parts := strings.Split(log, "\x00")
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
-		part = strings.TrimRight(part, "\r\n")
+		part = strings.Trim(part, "\r\n")
 		if strings.TrimSpace(part) == "" {
 			continue
 		}

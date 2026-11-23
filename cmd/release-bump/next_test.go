@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/envsync-cloud/minikms/internal/release"
 )
 
 func TestNormalizeLabel(t *testing.T) {
@@ -94,6 +96,22 @@ func TestSplitNullMessages(t *testing.T) {
 	}
 	if got[1] != "fix(api): two" {
 		t.Fatalf("second = %q", got[1])
+	}
+
+	leading := splitNullMessages("\x00\nfeat: x")
+	if len(leading) != 1 || leading[0] != "feat: x" {
+		t.Fatalf("leading newline record = %#v", leading)
+	}
+	next, err := release.NextRC(release.NextInput{
+		Version:   "0.2.0",
+		StableTag: "v0.2.0",
+		Commits:   leading,
+	})
+	if err != nil {
+		t.Fatalf("NextRC: %v", err)
+	}
+	if next != "0.3.0-rc.1" {
+		t.Fatalf("leading newline record classified as %q, want feat minor 0.3.0-rc.1", next)
 	}
 }
 

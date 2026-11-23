@@ -28,9 +28,12 @@ on:
 permissions:
   contents: read
 
+# The default queue keeps one pending run and cancels older pending runs.
+# queue: max keeps them, so three merges that land close together each get an rc.
 concurrency:
   group: release-bump-dev
   cancel-in-progress: false
+  queue: max
 
 jobs:
   bump:

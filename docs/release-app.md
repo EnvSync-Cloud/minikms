@@ -26,7 +26,7 @@ Repository secret:
 | --- | --- |
 | `RELEASE_APP_PRIVATE_KEY` | GitHub App private key (PEM) |
 
-A merged pull request into `dev` runs the bump workflow. It writes the next `X.Y.Z-rc.N` into `VERSION`, commits that file, and pushes the annotated tag `vX.Y.Z-rc.N`. `workflow_dispatch` is the owner-run path for an rc of the current `dev` tip. Pushing an rc tag by hand is that same fallback.
+A merged pull request into `dev` runs the bump workflow. It writes the next `X.Y.Z-rc.N` into `VERSION`, commits that file, and pushes the annotated tag `vX.Y.Z-rc.N`. `workflow_dispatch` is the owner-run path for an rc of the current `dev` tip. The manual rc fallback is owner-only: set `VERSION` to the rc version with `make bump SPEC=X.Y.Z-rc.N`, commit and push that change to `dev` through the normal path, then create the matching annotated tag on that commit and push the tag. The release workflow checks that `VERSION` matches the tag.
 
 When `RELEASE_APP_ID` is unset, the workflow warns `release app not configured; no rc created` and exits successfully.
 
