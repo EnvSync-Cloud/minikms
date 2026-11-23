@@ -90,6 +90,9 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if !strings.Contains(usage, "Exit status 4") || !strings.Contains(usage, "unknown") {
 		t.Fatalf("usage missing status 4: %s", usage)
 	}
+	if !strings.Contains(usage, "Member-key envelopes") || !strings.Contains(usage, "previous encoding") {
+		t.Fatalf("usage missing member-key scope: %s", usage)
+	}
 	assertUnknownCommitGuidance(t, usage)
 }
 
@@ -165,7 +168,7 @@ func assertUnknownCommitGuidance(t *testing.T, text string) {
 		"conclusive only if it exits 0",
 		"reports zero failures",
 		"scanned at least one in-scope row",
-		"key_versions + certificates scanned > 0",
+		"key_versions + certificates scanned + opened member-key envelopes > 0",
 		"total scanned",
 		"the commit did not land",
 		"the commit landed",

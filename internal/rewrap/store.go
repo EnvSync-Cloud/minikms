@@ -7,8 +7,12 @@ import "context"
 // organization CA CSRs, and environment CAs are all stored with this type.
 const CertTypeOrgIntermediateCA = "org_intermediate_ca"
 
-// OrgKeySealedCertTypes returns the cert_type allowlist. Rewrap lists and
-// updates only these types.
+// CertTypeMember is the certificate cert_type for managed member keys.
+const CertTypeMember = "member"
+
+// OrgKeySealedCertTypes returns the organization CA cert_type allowlist.
+// Those rows are listed and updated with organization CA associated data.
+// Member rows are listed separately.
 func OrgKeySealedCertTypes() []string {
 	return []string{CertTypeOrgIntermediateCA}
 }
@@ -20,8 +24,9 @@ type KeyVersionRow struct {
 	EncryptedKey []byte
 }
 
-// CertificateRow is one allowlisted certificate ciphertext. It is sealed with
-// AAD org-ca-key:<org_id>:<serial_number>.
+// CertificateRow is one certificate ciphertext selected for rewrap.
+// Organization CA rows use AAD org-ca-key:<org_id>:<serial_number>.
+// Member-key envelopes use AAD member-key:<org_id>:<serial_number>.
 type CertificateRow struct {
 	ID                  string
 	OrgID               string
@@ -44,6 +49,8 @@ type Store interface {
 type Tx interface {
 	ListKeyVersions(ctx context.Context) ([]KeyVersionRow, error)
 	ListCertificates(ctx context.Context, certTypes []string) ([]CertificateRow, error)
+	// ListMemberKeys returns every member certificate, including rows with no key material.
+	ListMemberKeys(ctx context.Context) ([]CertificateRow, error)
 	UpdateKeyVersion(ctx context.Context, id string, encryptedKey []byte) error
 	UpdateCertificate(ctx context.Context, id string, encryptedPrivateKey []byte) error
 	ReadKeyVersion(ctx context.Context, id string) ([]byte, error)

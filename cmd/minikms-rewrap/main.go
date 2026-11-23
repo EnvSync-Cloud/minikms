@@ -110,13 +110,15 @@ func parseFlags(args []string, stderr io.Writer) (dryRun bool, confirm bool, new
 		_, _ = fmt.Fprintf(out, "Current root key: MINIKMS_ROOT_KEY_FILE or MINIKMS_ROOT_KEY\n")
 		_, _ = fmt.Fprintf(out, "Database: MINIKMS_DB_URL\n")
 		_, _ = fmt.Fprintf(out, "HKDF salt: MINIKMS_HKDF_SALT when the server sets it\n")
+		_, _ = fmt.Fprintf(out, "Member-key envelopes are re-sealed with the same associated data.\n")
+		_, _ = fmt.Fprintf(out, "Empty member rows and member rows in the previous encoding are left unchanged.\n")
 		_, _ = fmt.Fprintf(out, "Exit status 1: the rewrap was not committed.\n")
 		_, _ = fmt.Fprintf(out, "Exit status 3: the rewrap committed and the report could not be written. miniKMS must now be started with the new root key.\n")
 		_, _ = fmt.Fprintf(out, "Exit status 4: the commit outcome is unknown. Keep miniKMS stopped. "+
 			"Check A: dry-run with the old key as MINIKMS_ROOT_KEY_FILE and a valid, distinct trial key "+
 			"(a freshly generated 32-byte hex key in a mode-0600 file, different from both the old and new keys) as --new-key-file. "+
 			"Check B: dry-run with the new key as MINIKMS_ROOT_KEY_FILE and the same valid, distinct trial key as --new-key-file. "+
-			"A check is conclusive only if it exits 0, reports zero failures, and scanned at least one in-scope row (key_versions + certificates scanned > 0, printed as total scanned). "+
+			"A check is conclusive only if it exits 0, reports zero failures, and scanned at least one in-scope row (key_versions + certificates scanned + opened member-key envelopes > 0, printed as total scanned). "+
 			"Only if Check A is conclusive: the commit did not land; keep the old key. "+
 			"Only if Check B is conclusive: the commit landed; start miniKMS with the new key. "+
 			"If both checks scan zero rows, or neither is conclusive, the outcome stays unknown: "+

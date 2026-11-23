@@ -13,18 +13,26 @@ The command reads and updates:
 - `key_versions.encrypted_key` for every row, including retired versions.
   The associated data is `dek:<org_id>`.
 - `certificates.encrypted_private_key` where `cert_type` is
-  `org_intermediate_ca`. That value is the allowlist. Active organization
-  intermediate CAs, pending organization CA CSRs, and environment CAs are
-  stored with this cert type. The associated data is
+  `org_intermediate_ca`. That value is the organization CA allowlist. Active
+  organization intermediate CAs, pending organization CA CSRs, and environment
+  CAs are stored with this cert type. The associated data is
   `org-ca-key:<org_id>:<serial_number>`.
+- `certificates.encrypted_private_key` where `cert_type` is `member`.
+  A row that opens with associated data `member-key:<org_id>:<serial_number>`
+  under the current root key is re-sealed with that same associated data.
+  Empty member rows, and member rows that still use the previous member-key
+  encoding, are left unchanged and counted. A member row that is neither an
+  envelope under the current root key nor that previous encoding is a failure.
+  The command then rolls back and leaves stored data unchanged.
 
-Certificate rows whose `cert_type` is not on that allowlist are not read or
-updated. A null `encrypted_private_key` is not in scope. `vault_entries` and
-`org_ca_wraps` are not root-key sealed and are left unchanged. Escrow shares
-are sealed with the escrow seal key and are not rewrapped. This command does
-not support deployments with an active root escrow set. If one exists, the
-command exits without changing data. Rotating a root key that is under escrow
-is out of scope for this command.
+Certificate rows whose `cert_type` is neither `org_intermediate_ca` nor
+`member` are not read or updated. A null `encrypted_private_key` on an
+organization CA row is not in scope. `vault_entries` and `org_ca_wraps` are
+not root-key sealed and are left unchanged. Escrow shares are sealed with the
+escrow seal key and are not rewrapped. This command does not support
+deployments with an active root escrow set. If one exists, the command exits
+without changing data. Rotating a root key that is under escrow is out of
+scope for this command.
 
 `MINIKMS_HKDF_SALT` must match the server. When it is unset, the command uses
 the server default. The database must already include `key_escrow_sets` so the
@@ -61,9 +69,10 @@ Example output:
 
 ```text
 mode=dry-run orgs=2
-total scanned=7
+total scanned=9
 key_versions scanned=4 rewrapped=4 failed=0
 certificates cert_type=org_intermediate_ca scanned=3 rewrapped=3 failed=0
+member_wrapped_rewrapped=2 member_legacy_skipped=1 member_empty_skipped=1 member_failed=0
 ```
 
 A real run requires both flags. Stop miniKMS first. Take a database dump
@@ -84,10 +93,19 @@ unchanged. A failure to write the count report after commit does not roll
 back. If Commit itself returns an error, the outcome is unknown: the server
 may have committed before the acknowledgement was lost.
 
-Output is counts only: `total scanned` (the sum of `key_versions` scanned
-and `certificates` scanned); `key_versions` scanned, rewrapped, and failed;
-`certificates` scanned, rewrapped, and failed per cert type; `mode=dry-run`
-or `mode=commit`; and `orgs`. No key material is printed.
+Output is counts only: `total scanned`; `key_versions` scanned, rewrapped,
+and failed; `certificates` scanned, rewrapped, and failed per cert type;
+`member_wrapped_rewrapped`, `member_legacy_skipped`, `member_empty_skipped`,
+and `member_failed`; `mode=dry-run` or `mode=commit`; and `orgs`. No key
+material is printed. `total scanned` is `key_versions` scanned, plus
+organization CA rows scanned, plus member-key envelopes that open under the
+current root key. Empty member rows and member rows in the previous encoding
+are not included in that total. `member_wrapped_rewrapped` is the number of
+member-key envelopes re-sealed, or the number that would be re-sealed on a
+dry run. The skipped fields count member rows left unchanged. `member_failed`
+counts member rows that are not an envelope under the current root key and
+are not the previous encoding. A non-zero `member_failed` aborts the run
+before commit, including a dry run.
 
 After a committed run, start miniKMS with the new root key
 (`MINIKMS_ROOT_KEY_FILE` or `MINIKMS_ROOT_KEY`). Keep the previous key file
@@ -106,11 +124,12 @@ Determine the state with two dry-runs. Use a valid, distinct trial key: a
 freshly generated 32-byte hex key in a mode-0600 file, different from both
 the old and new keys. Delete the trial key file afterwards.
 
-A check is conclusive only if it exits 0, reports zero failures, and scanned
-at least one in-scope row (`key_versions` scanned plus `certificates` scanned
-is greater than 0). The report prints that sum as `total scanned`. Exit 0
-with zero failures and `total scanned=0` proves nothing: both keys can
-dry-run cleanly when no in-scope rows exist.
+A check is conclusive only if it exits 0, reports zero failures, and
+`total scanned` is greater than 0. That total is `key_versions` scanned, plus
+organization CA rows scanned, plus member-key envelopes that open under the
+current root key. Empty member rows and member rows in the previous encoding
+do not count toward it. Exit 0 with zero failures and `total scanned=0`
+proves nothing: both keys can dry-run cleanly when no opening rows exist.
 
 Check A: dry-run with the old key as `MINIKMS_ROOT_KEY_FILE` and that trial
 key as `--new-key-file`. Only if Check A is conclusive, the commit did not

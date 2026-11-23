@@ -44,7 +44,8 @@ func NewPostgresStore(ctx context.Context, connString string) (*PostgresStore, e
 	}
 	config, err := pgxpool.ParseConfig(connString)
 	if err != nil {
-		return nil, fmt.Errorf("connect to PostgreSQL: %w", err)
+		// The parser error includes the connection string, so return a fixed message.
+		return nil, fmt.Errorf("connect to PostgreSQL: MINIKMS_DB_URL is not a valid connection string")
 	}
 	config.MaxConns = 4
 	config.MinConns = 0
@@ -152,6 +153,28 @@ func (t *postgresTx) ListCertificates(ctx context.Context, certTypes []string) (
 	return out, nil
 }
 
+func (t *postgresTx) ListMemberKeys(ctx context.Context) ([]CertificateRow, error) {
+	rows, err := t.tx.Query(ctx, memberListSQL(t.forUpdate))
+	if err != nil {
+		return nil, fmt.Errorf("list member keys: %w", err)
+	}
+	defer rows.Close()
+
+	var out []CertificateRow
+	for rows.Next() {
+		var row CertificateRow
+		if err := rows.Scan(&row.ID, &row.OrgID, &row.SerialNumber, &row.CertType, &row.EncryptedPrivateKey); err != nil {
+			return nil, fmt.Errorf("scan member key: %w", err)
+		}
+		row.EncryptedPrivateKey = cloneBytes(row.EncryptedPrivateKey)
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list member keys: %w", err)
+	}
+	return out, nil
+}
+
 func (t *postgresTx) UpdateKeyVersion(ctx context.Context, id string, encryptedKey []byte) error {
 	tag, err := t.tx.Exec(ctx, updateKeyVersionSQL, encryptedKey, id)
 	if err != nil {
@@ -200,6 +223,17 @@ func (t *postgresTx) Rollback(ctx context.Context) error {
 		return nil
 	}
 	return err
+}
+
+func memberListSQL(forUpdate bool) string {
+	query := `SELECT id, COALESCE(org_id, ''), serial_number, cert_type, encrypted_private_key
+FROM certificates
+WHERE cert_type = 'member'
+ORDER BY id`
+	if forUpdate {
+		query += "\nFOR UPDATE"
+	}
+	return query
 }
 
 func keyVersionListSQL(forUpdate bool) string {

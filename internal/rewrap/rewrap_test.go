@@ -14,7 +14,11 @@ import (
 	"strings"
 	"testing"
 
+	"crypto/ecdsa"
+	"crypto/elliptic"
+
 	"github.com/envsync-cloud/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/keys"
 	"github.com/envsync-cloud/minikms/internal/rewrap"
 )
 
@@ -26,6 +30,14 @@ func TestAllowlist(t *testing.T) {
 	if rewrap.CertTypeOrgIntermediateCA != "org_intermediate_ca" {
 		t.Fatalf("cert type = %s", rewrap.CertTypeOrgIntermediateCA)
 	}
+	if rewrap.CertTypeMember != "member" {
+		t.Fatalf("member cert type = %s", rewrap.CertTypeMember)
+	}
+	for _, typ := range types {
+		if typ == rewrap.CertTypeMember {
+			t.Fatal("member rows are on the organization CA allowlist")
+		}
+	}
 }
 
 func TestDryRunZeroInScopeRowsReportsTotalScanned(t *testing.T) {
@@ -35,11 +47,12 @@ func TestDryRunZeroInScopeRowsReportsTotalScanned(t *testing.T) {
 	delete(f.store.kvs, "kv3")
 	delete(f.store.certs, "ca1")
 	delete(f.store.certs, "ca2")
+	delete(f.store.certs, f.memberID)
 	out, err := f.run(t, true)
 	if err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
-	want := fmt.Sprintf("mode=dry-run orgs=0\ntotal scanned=0\nkey_versions scanned=0 rewrapped=0 failed=0\ncertificates cert_type=%s scanned=0 rewrapped=0 failed=0\n", rewrap.CertTypeOrgIntermediateCA)
+	want := fmt.Sprintf("mode=dry-run orgs=0\ntotal scanned=0\nkey_versions scanned=0 rewrapped=0 failed=0\ncertificates cert_type=%s scanned=0 rewrapped=0 failed=0\nmember_wrapped_rewrapped=0 member_legacy_skipped=0 member_empty_skipped=0 member_failed=0\n", rewrap.CertTypeOrgIntermediateCA)
 	if out != want {
 		t.Fatalf("report:\n%s", out)
 	}
@@ -58,7 +71,7 @@ func TestRewrapDryRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
-	if out != wantReport("dry-run", 3, 0, 2, 0) {
+	if out != wantReport("dry-run", 3, 0, 2, 0, 1, 0, 0, 0) {
 		t.Fatalf("report:\n%s", out)
 	}
 	assertNoKeyHex(t, out, f.oldKey, f.newKey)
@@ -77,24 +90,23 @@ func TestRewrapDryRun(t *testing.T) {
 
 func TestRewrapCommit(t *testing.T) {
 	f := newFixture(t)
-	memberBefore := f.store.ciphertext(f.memberID)
 	leafBefore := f.store.ciphertext(f.leafID)
 	out, err := f.run(t, false)
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}
-	if out != wantReport("commit", 3, 0, 2, 0) {
+	if out != wantReport("commit", 3, 0, 2, 0, 1, 0, 0, 0) {
 		t.Fatalf("report:\n%s", out)
 	}
 	assertNoKeyHex(t, out, f.oldKey, f.newKey)
-	if f.store.updates != 5 || f.store.commits != 1 || f.store.rollbacks != 0 {
+	if f.store.updates != 6 || f.store.commits != 1 || f.store.rollbacks != 0 {
 		t.Fatalf("updates=%d commits=%d rollbacks=%d", f.store.updates, f.store.commits, f.store.rollbacks)
 	}
 	if len(f.store.begins) != 1 || f.store.begins[0] {
 		t.Fatalf("begins = %v, want one read-write transaction", f.store.begins)
 	}
 	assertScope(t, f, true)
-	if !bytes.Equal(f.store.ciphertext(f.memberID), memberBefore) || !bytes.Equal(f.store.ciphertext(f.leafID), leafBefore) {
+	if !bytes.Equal(f.store.ciphertext(f.leafID), leafBefore) {
 		t.Fatal("out-of-scope certificate bytes changed")
 	}
 
@@ -109,6 +121,129 @@ func TestRewrapCommit(t *testing.T) {
 		}
 		crypto.ZeroizeBytes(got)
 		mustNotOpen(t, f.oldKey, f.orgOf[id], ct, f.aads[id])
+	}
+}
+
+func TestRewrapMemberKeys(t *testing.T) {
+	t.Run("dry-run writes nothing", func(t *testing.T) {
+		f := newMemberMix(t)
+		before := f.store.snapshot()
+		out, err := f.run(t, true)
+		if err != nil {
+			t.Fatalf("dry-run: %v", err)
+		}
+		if out != wantReport("dry-run", 3, 0, 2, 0, 1, 1, 1, 0) {
+			t.Fatalf("report:\n%s", out)
+		}
+		assertSame(t, f.store, before)
+		if f.store.updates != 0 || f.store.commits != 0 {
+			t.Fatalf("writes recorded updates=%d commits=%d", f.store.updates, f.store.commits)
+		}
+	})
+
+	t.Run("commit rotates envelope and leaves legacy and empty", func(t *testing.T) {
+		f := newMemberMix(t)
+		legacyBefore := f.store.ciphertext("mem-legacy")
+		emptyBefore := f.store.ciphertext("mem-empty")
+		leafBefore := f.store.ciphertext(f.leafID)
+		orgCABefore := f.store.ciphertext("ca1")
+		out, err := f.run(t, false)
+		if err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+		if out != wantReport("commit", 3, 0, 2, 0, 1, 1, 1, 0) {
+			t.Fatalf("report:\n%s", out)
+		}
+		if f.store.updates != 6 || f.store.commits != 1 {
+			t.Fatalf("updates=%d commits=%d", f.store.updates, f.store.commits)
+		}
+		if !bytes.Equal(f.store.ciphertext("mem-legacy"), legacyBefore) {
+			t.Fatal("legacy member row changed")
+		}
+		if !bytes.Equal(f.store.ciphertext("mem-empty"), emptyBefore) || len(emptyBefore) != 0 {
+			t.Fatal("empty member row changed")
+		}
+		if !bytes.Equal(f.store.ciphertext(f.leafID), leafBefore) {
+			t.Fatal("leaf row changed")
+		}
+		if bytes.Equal(f.store.ciphertext("ca1"), orgCABefore) {
+			t.Fatal("organization CA row was not rewrapped")
+		}
+		memberCT := f.store.ciphertext(f.memberID)
+		if bytes.Equal(memberCT, f.original[f.memberID]) {
+			t.Fatal("member envelope was not rewrapped")
+		}
+		got := mustOpen(t, f.newKey, f.orgOf[f.memberID], memberCT, f.aads[f.memberID])
+		if !bytes.Equal(got, f.plains[f.memberID]) {
+			t.Fatal("member envelope did not open with the new root key")
+		}
+		crypto.ZeroizeBytes(got)
+		mustNotOpen(t, f.oldKey, f.orgOf[f.memberID], memberCT, f.aads[f.memberID])
+		mustNotOpen(t, f.newKey, f.orgOf[f.memberID], memberCT, []byte("org-ca-key:"+f.orgOf[f.memberID]+":mem-serial"))
+	})
+
+	t.Run("failed member aborts", func(t *testing.T) {
+		for _, dryRun := range []bool{true, false} {
+			f := newMemberMix(t)
+			f.store.certs["mem-bad"] = rewrap.CertificateRow{
+				ID:                  "mem-bad",
+				OrgID:               "org-c",
+				SerialNumber:        "bad-serial",
+				CertType:            rewrap.CertTypeMember,
+				EncryptedPrivateKey: []byte{0xff, 0x00, 0x01},
+			}
+			before := f.store.snapshot()
+			out, err := f.run(t, dryRun)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), "could not be decrypted") {
+				t.Fatalf("err = %v", err)
+			}
+			if strings.Contains(out, "bad-serial") || strings.Contains(err.Error(), "bad-serial") {
+				t.Fatal("failure report included a serial")
+			}
+			mode := "commit"
+			if dryRun {
+				mode = "dry-run"
+			}
+			if out != wantReport(mode, 0, 0, 0, 0, 0, 1, 1, 1) {
+				t.Fatalf("report:\n%s", out)
+			}
+			assertSame(t, f.store, before)
+			if f.store.updates != 0 || f.store.commits != 0 {
+				t.Fatalf("writes recorded updates=%d commits=%d", f.store.updates, f.store.commits)
+			}
+		}
+	})
+}
+
+func newMemberMix(t *testing.T) *fixture {
+	t.Helper()
+	f := newFixture(t)
+	f.addMemberLegacy(t, "mem-legacy", "org-c", "legacy-serial")
+	f.store.certs["mem-empty"] = rewrap.CertificateRow{
+		ID:           "mem-empty",
+		OrgID:        "org-c",
+		SerialNumber: "empty-serial",
+		CertType:     rewrap.CertTypeMember,
+	}
+	return f
+}
+
+func (f *fixture) addMemberLegacy(t *testing.T, id, orgID, serial string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob := crypto.MarshalECPrivateKey(key)
+	f.store.certs[id] = rewrap.CertificateRow{
+		ID:                  id,
+		OrgID:               orgID,
+		SerialNumber:        serial,
+		CertType:            rewrap.CertTypeMember,
+		EncryptedPrivateKey: blob,
 	}
 }
 
@@ -157,7 +292,7 @@ func TestRewrapAbortsWhenRowCannotDecrypt(t *testing.T) {
 			if dryRun {
 				mode = "dry-run"
 			}
-			if out != wantReport(mode, 0, 1, 0, 0) {
+			if out != wantReport(mode, 0, 1, 0, 0, 0, 0, 0, 0) {
 				t.Fatalf("report:\n%s", out)
 			}
 			assertNoKeyHex(t, out+"\n"+err.Error(), f.oldKey, f.newKey)
@@ -171,7 +306,7 @@ func TestRewrapAbortsWhenRowCannotDecrypt(t *testing.T) {
 			}
 			crypto.ZeroizeBytes(got)
 			mustNotOpen(t, f.newKey, f.orgOf["kv1"], f.store.ciphertext("kv1"), f.aads["kv1"])
-			if !f.store.read["ca1"] || f.store.read[f.memberID] || f.store.read[f.leafID] {
+			if !f.store.read["ca1"] || !f.store.read[f.memberID] || f.store.read[f.leafID] {
 				t.Fatal("certificate read set is wrong")
 			}
 		})
@@ -493,9 +628,10 @@ func TestLoadCurrentRootKey(t *testing.T) {
 	}
 }
 
-func wantReport(mode string, kvRewrapped, kvFailed, certRewrapped, certFailed int) string {
-	return fmt.Sprintf("mode=%s orgs=2\ntotal scanned=5\nkey_versions scanned=3 rewrapped=%d failed=%d\ncertificates cert_type=%s scanned=2 rewrapped=%d failed=%d\n",
-		mode, kvRewrapped, kvFailed, rewrap.CertTypeOrgIntermediateCA, certRewrapped, certFailed)
+func wantReport(mode string, kvRewrapped, kvFailed, certRewrapped, certFailed, memberRewrapped, memberLegacy, memberEmpty, memberFailed int) string {
+	return fmt.Sprintf("mode=%s orgs=3\ntotal scanned=6\nkey_versions scanned=3 rewrapped=%d failed=%d\ncertificates cert_type=%s scanned=2 rewrapped=%d failed=%d\nmember_wrapped_rewrapped=%d member_legacy_skipped=%d member_empty_skipped=%d member_failed=%d\n",
+		mode, kvRewrapped, kvFailed, rewrap.CertTypeOrgIntermediateCA, certRewrapped, certFailed,
+		memberRewrapped, memberLegacy, memberEmpty, memberFailed)
 }
 
 func assertUnknownCommitGuidance(t *testing.T, text string) {
@@ -512,7 +648,7 @@ func assertUnknownCommitGuidance(t *testing.T, text string) {
 		"conclusive only if it exits 0",
 		"reports zero failures",
 		"scanned at least one in-scope row",
-		"key_versions + certificates scanned > 0",
+		"key_versions + certificates scanned + opened member-key envelopes > 0",
 		"total scanned",
 		"the commit did not land",
 		"the commit landed",
@@ -565,10 +701,10 @@ func assertSame(t *testing.T, store *memStore, before map[string][]byte) {
 
 func assertScope(t *testing.T, f *fixture, readInScope bool) {
 	t.Helper()
-	if readInScope && (!f.store.read["ca1"] || !f.store.read["ca2"]) {
+	if readInScope && (!f.store.read["ca1"] || !f.store.read["ca2"] || !f.store.read[f.memberID]) {
 		t.Fatal("in-scope certificates were not read")
 	}
-	if f.store.read[f.memberID] || f.store.read[f.leafID] {
+	if f.store.read[f.leafID] {
 		t.Fatal("out-of-scope certificate was read")
 	}
 	if len(f.store.listedTypes) != 1 || f.store.listedTypes[0] != rewrap.CertTypeOrgIntermediateCA {
@@ -665,7 +801,7 @@ func newFixture(t *testing.T) *fixture {
 	f.addKV(t, "kv3", "org-b")
 	f.addCert(t, "ca1", "org-a", "11aa", rewrap.CertTypeOrgIntermediateCA, true)
 	f.addCert(t, "ca2", "org-b", "pending-orgb0001", rewrap.CertTypeOrgIntermediateCA, true)
-	f.addCert(t, f.memberID, "org-c", "mem-serial", "member", false)
+	f.addMemberEnvelope(t, f.memberID, "org-c", "mem-serial")
 	f.addCert(t, f.leafID, "org-d", "leaf-serial", "leaf", false)
 	return f
 }
@@ -689,6 +825,24 @@ func (f *fixture) addKV(t *testing.T, id, orgID string) {
 	aad := []byte("dek:" + orgID)
 	ct := mustSeal(t, f.oldKey, orgID, plain, aad)
 	f.store.kvs[id] = rewrap.KeyVersionRow{ID: id, OrgID: orgID, EncryptedKey: ct}
+	f.plains[id] = plain
+	f.aads[id] = aad
+	f.orgOf[id] = orgID
+	f.original[id] = append([]byte(nil), ct...)
+}
+
+func (f *fixture) addMemberEnvelope(t *testing.T, id, orgID, serial string) {
+	t.Helper()
+	plain := randomBytes(t, 32)
+	aad := []byte(keys.MemberKeyAAD(orgID, serial))
+	ct := mustSeal(t, f.oldKey, orgID, plain, aad)
+	f.store.certs[id] = rewrap.CertificateRow{
+		ID:                  id,
+		OrgID:               orgID,
+		SerialNumber:        serial,
+		CertType:            rewrap.CertTypeMember,
+		EncryptedPrivateKey: ct,
+	}
 	f.plains[id] = plain
 	f.aads[id] = aad
 	f.orgOf[id] = orgID
@@ -862,6 +1016,25 @@ func (t *memTx) ListCertificates(_ context.Context, certTypes []string) ([]rewra
 	return out, nil
 }
 
+func (t *memTx) ListMemberKeys(context.Context) ([]rewrap.CertificateRow, error) {
+	ids := make([]string, 0, len(t.certs))
+	for id := range t.certs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var out []rewrap.CertificateRow
+	for _, id := range ids {
+		row := t.certs[id]
+		if row.CertType != rewrap.CertTypeMember {
+			continue
+		}
+		t.store.read[id] = true
+		row.EncryptedPrivateKey = append([]byte(nil), row.EncryptedPrivateKey...)
+		out = append(out, row)
+	}
+	return out, nil
+}
+
 func (t *memTx) UpdateKeyVersion(_ context.Context, id string, encryptedKey []byte) error {
 	t.store.updates++
 	if _, ok := t.kvs[id]; !ok {
@@ -877,7 +1050,7 @@ func (t *memTx) UpdateCertificate(_ context.Context, id string, encryptedPrivate
 	if !ok {
 		return fmt.Errorf("certificate not in transaction")
 	}
-	if row.CertType != rewrap.CertTypeOrgIntermediateCA {
+	if row.CertType != rewrap.CertTypeOrgIntermediateCA && row.CertType != rewrap.CertTypeMember {
 		return fmt.Errorf("refusing update outside allowlist")
 	}
 	t.certOverlay[id] = append([]byte(nil), encryptedPrivateKey...)
