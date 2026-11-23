@@ -258,7 +258,20 @@ func TestMemberKeyEnvelope_CatchesLegacyAndCorruptBlob(t *testing.T) {
 	}
 
 	t.Run("verify mismatch rolls back", func(t *testing.T) {
+		orgKey, err := mgr.DeriveOrgKey("org-alpha")
+		if err != nil {
+			t.Fatal(err)
+		}
+		anchor, err := crypto.Encrypt(orgKey, raw, []byte(keys.MemberKeyAAD("org-alpha", "serial-anchor")))
+		crypto.ZeroizeBytes(orgKey)
+		if err != nil {
+			t.Fatal(err)
+		}
 		onlyRaw := newMemStore([]Row{
+			{
+				ID: "anchor", SerialNumber: "serial-anchor", CertType: "member",
+				OrgID: "org-alpha", Status: "active", ExpiresAt: future, EncryptedPrivateKey: anchor,
+			},
 			{
 				ID: "raw-member", SerialNumber: "serial-raw-member", CertType: "member",
 				OrgID: "org-alpha", Status: "active", ExpiresAt: future, EncryptedPrivateKey: bytes.Clone(raw),
@@ -270,7 +283,7 @@ func TestMemberKeyEnvelope_CatchesLegacyAndCorruptBlob(t *testing.T) {
 		})
 		base := onlyRaw.snapshot()
 		flaky := &flipReadStore{memStore: onlyRaw}
-		err := Run(context.Background(), flaky, mgr, ModeConfirm, now, io.Discard)
+		err = Run(context.Background(), flaky, mgr, ModeConfirm, now, io.Discard)
 		if !errors.Is(err, ErrVerifyFailed) {
 			t.Fatalf("verify error = %v", err)
 		}

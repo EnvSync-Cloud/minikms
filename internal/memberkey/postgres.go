@@ -17,7 +17,7 @@ ORDER BY serial_number, id`
 
 const updateMemberKeySQL = `UPDATE certificates
 SET encrypted_private_key = $1
-WHERE id = $2 AND cert_type = 'member' AND encrypted_private_key = $3`
+WHERE id = $2 AND cert_type = 'member'`
 
 const readMemberKeySQL = `SELECT encrypted_private_key
 FROM certificates
@@ -37,6 +37,9 @@ var (
 func NewPostgresStore(ctx context.Context, connString string) (*PostgresStore, error) {
 	if strings.TrimSpace(connString) == "" {
 		return nil, fmt.Errorf("MINIKMS_DB_URL is required")
+	}
+	if err := validateDBTLSMode(connString); err != nil {
+		return nil, err
 	}
 	config, err := pgxpool.ParseConfig(connString)
 	if err != nil {
@@ -113,7 +116,10 @@ func (t *postgresTx) ListCertificates(ctx context.Context) ([]Row, error) {
 }
 
 func (t *postgresTx) UpdateMemberKey(ctx context.Context, id string, previous, wrapped []byte) error {
-	tag, err := t.tx.Exec(ctx, updateMemberKeySQL, wrapped, id, previous)
+	// previous stays in the call so the in-memory store can reject a mismatched
+	// row. It is not sent to PostgreSQL, where a statement log would keep it.
+	_ = previous
+	tag, err := t.tx.Exec(ctx, updateMemberKeySQL, wrapped, id)
 	if err != nil {
 		return fmt.Errorf("update member key: %w", err)
 	}
@@ -141,6 +147,29 @@ func (t *postgresTx) Rollback(ctx context.Context) error {
 		return nil
 	}
 	return err
+}
+
+// validateDBTLSMode rejects modes that send key material without checking the
+// server certificate. sslmode=disable remains available for a private network.
+func validateDBTLSMode(connString string) error {
+	switch sslMode(connString) {
+	case "disable", "verify-ca", "verify-full":
+		return nil
+	default:
+		return fmt.Errorf("MINIKMS_DB_URL must set sslmode=verify-full or sslmode=verify-ca; sslmode=disable is allowed only on a private network")
+	}
+}
+
+func sslMode(connString string) string {
+	lower := strings.ToLower(connString)
+	for _, part := range strings.FieldsFunc(lower, func(r rune) bool {
+		return r == ' ' || r == '&' || r == '?'
+	}) {
+		if strings.HasPrefix(part, "sslmode=") {
+			return strings.TrimPrefix(part, "sslmode=")
+		}
+	}
+	return ""
 }
 
 func listSQL(forUpdate bool) string {

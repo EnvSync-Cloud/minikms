@@ -7,10 +7,14 @@ import "context"
 // organization CA CSRs, and environment CAs are all stored with this type.
 const CertTypeOrgIntermediateCA = "org_intermediate_ca"
 
+// CertTypeMember is a managed member certificate. Its private key is sealed
+// with member-key associated data when the envelope exists.
+const CertTypeMember = "member"
+
 // OrgKeySealedCertTypes returns the cert_type allowlist. Rewrap lists and
 // updates only these types.
 func OrgKeySealedCertTypes() []string {
-	return []string{CertTypeOrgIntermediateCA}
+	return []string{CertTypeOrgIntermediateCA, CertTypeMember}
 }
 
 // KeyVersionRow is one key_versions ciphertext. It is sealed with AAD dek:<org_id>.

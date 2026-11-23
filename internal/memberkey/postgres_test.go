@@ -8,7 +8,7 @@ import (
 
 func TestNewPostgresStore_InvalidURLOmitsConnectionString(t *testing.T) {
 	const token = "db-setting-9f3c2a"
-	conn := "postgresql://operator@db/minikms?password=" + token + "&connect_timeout=not-a-duration"
+	conn := "postgresql://operator@db/minikms?sslmode=verify-full&password=" + token + "&connect_timeout=not-a-duration"
 	_, err := NewPostgresStore(context.Background(), conn)
 	if err == nil {
 		t.Fatal("expected an invalid connection string to fail")

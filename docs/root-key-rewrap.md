@@ -112,18 +112,25 @@ is greater than 0). The report prints that sum as `total scanned`. Exit 0
 with zero failures and `total scanned=0` proves nothing: both keys can
 dry-run cleanly when no in-scope rows exist.
 
+Unset `MINIKMS_ROOT_KEY` before either check when you pass the key in
+`MINIKMS_ROOT_KEY_FILE`. The loader rejects both sources together.
+
 Check A: dry-run with the old key as `MINIKMS_ROOT_KEY_FILE` and that trial
-key as `--new-key-file`. Only if Check A is conclusive, the commit did not
-land; keep the old key.
+key as `--new-key-file`. Check A alone is not proof the commit did not land.
+The server can still finish a commit the client did not receive, and both
+dry-runs can read the old rows until it does.
 
 Check B: dry-run with the new key as `MINIKMS_ROOT_KEY_FILE` and the same
-valid, distinct trial key as `--new-key-file`. Only if Check B is conclusive,
-the commit landed; start miniKMS with the new key.
+valid, distinct trial key as `--new-key-file`. Repeat both checks only after
+that database session is gone. Only if Check B is conclusive after that, the
+commit landed; start miniKMS with the new key. Only if Check A is conclusive
+and Check B is not, after that session is gone, the commit did not land; keep
+the old key.
 
-If both checks scan zero rows, or neither is conclusive, the outcome stays
-unknown. Keep miniKMS stopped and restore from the pre-rotation DB dump with
-the old key (or investigate). The rollback section describes restoring that
-dump.
+If that state cannot be established, both checks scan zero rows, or neither
+is conclusive, the outcome stays unknown. Keep miniKMS stopped and restore
+from the pre-rotation DB dump with the old key (or investigate). The rollback
+section describes restoring that dump.
 
 ## Rollback
 

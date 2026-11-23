@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/envsync-cloud/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/keys"
 )
 
 const (
@@ -52,9 +53,12 @@ var ErrCommitOutcomeUnknown = errors.New("rewrap commit outcome is unknown; keep
 	"(a freshly generated 32-byte hex key in a mode-0600 file, different from both the old and new keys) as --new-key-file. " +
 	"Check B: dry-run with the new key as MINIKMS_ROOT_KEY_FILE and the same valid, distinct trial key as --new-key-file. " +
 	"A check is conclusive only if it exits 0, reports zero failures, and scanned at least one in-scope row (key_versions + certificates scanned > 0, printed as total scanned). " +
-	"Only if Check A is conclusive: the commit did not land; keep the old key. " +
-	"Only if Check B is conclusive: the commit landed; start miniKMS with the new key. " +
-	"If both checks scan zero rows, or neither is conclusive, the outcome stays unknown: " +
+	"Unset MINIKMS_ROOT_KEY before either check when the key is passed in MINIKMS_ROOT_KEY_FILE. " +
+	"Check A alone is not proof the commit did not land while the server can still finish it. " +
+	"Repeat both checks only after that database session is gone. " +
+	"Only if Check B is conclusive after that: the commit landed; start miniKMS with the new key. " +
+	"Only if Check A is conclusive and Check B is not, after that session is gone: the commit did not land; keep the old key. " +
+	"If that state cannot be established, or both checks scan zero rows, or neither is conclusive, the outcome stays unknown: " +
 	"keep miniKMS stopped and restore from the pre-rotation DB dump with the old key (or investigate). " +
 	"Delete the trial key file afterwards")
 
@@ -255,9 +259,12 @@ func rewrapTx(ctx context.Context, tx Tx, opts Options, secrets *secretBufs) (re
 		if slot == nil {
 			return report{}, fmt.Errorf("refusing certificate outside the rewrap allowlist")
 		}
+		if row.CertType == CertTypeMember && skipMemberRewrap(row.EncryptedPrivateKey) {
+			continue
+		}
 		slot.scanned++
 		noteOrg(orgs, row.OrgID)
-		aad := orgCAKeyAAD(row.OrgID, row.SerialNumber)
+		aad := certificateAAD(row.CertType, row.OrgID, row.SerialNumber)
 		plain, openErr := openWith(secrets, oldCache, opts.OldKey, row.OrgID, row.EncryptedPrivateKey, aad)
 		if openErr != nil {
 			slot.failed++
@@ -369,6 +376,23 @@ func dekAAD(orgID string) []byte {
 // orgCAKeyAAD matches PKIService.orgCAKeyAAD.
 func orgCAKeyAAD(orgID, serial string) []byte {
 	return []byte("org-ca-key:" + orgID + ":" + serial)
+}
+
+func certificateAAD(certType, orgID, serial string) []byte {
+	if certType == CertTypeMember {
+		return []byte(keys.MemberKeyAAD(orgID, serial))
+	}
+	return orgCAKeyAAD(orgID, serial)
+}
+
+// skipMemberRewrap leaves empty and legacy raw member keys unchanged.
+// Envelopes stay in the rewrap. A blob that is neither is a failure.
+func skipMemberRewrap(blob []byte) bool {
+	if len(blob) == 0 {
+		return true
+	}
+	_, err := crypto.UnmarshalECPrivateKey(blob)
+	return err == nil
 }
 
 func cachedOrgKey(secrets *secretBufs, cache map[string][]byte, root []byte, orgID string) ([]byte, error) {

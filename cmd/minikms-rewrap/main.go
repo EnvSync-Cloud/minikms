@@ -107,7 +107,7 @@ func parseFlags(args []string, stderr io.Writer) (dryRun bool, confirm bool, new
 	fs.Usage = func() {
 		out := fs.Output()
 		_, _ = fmt.Fprintf(out, "usage: minikms-rewrap --new-key-file PATH [--dry-run=false --confirm]\n\n")
-		_, _ = fmt.Fprintf(out, "Current root key: MINIKMS_ROOT_KEY_FILE or MINIKMS_ROOT_KEY\n")
+		_, _ = fmt.Fprintf(out, "Current root key: MINIKMS_ROOT_KEY_FILE or MINIKMS_ROOT_KEY. Unset MINIKMS_ROOT_KEY before a file-based check; both sources together are rejected.\n")
 		_, _ = fmt.Fprintf(out, "Database: MINIKMS_DB_URL\n")
 		_, _ = fmt.Fprintf(out, "HKDF salt: MINIKMS_HKDF_SALT when the server sets it\n")
 		_, _ = fmt.Fprintf(out, "Exit status 1: the rewrap was not committed.\n")
@@ -117,9 +117,12 @@ func parseFlags(args []string, stderr io.Writer) (dryRun bool, confirm bool, new
 			"(a freshly generated 32-byte hex key in a mode-0600 file, different from both the old and new keys) as --new-key-file. "+
 			"Check B: dry-run with the new key as MINIKMS_ROOT_KEY_FILE and the same valid, distinct trial key as --new-key-file. "+
 			"A check is conclusive only if it exits 0, reports zero failures, and scanned at least one in-scope row (key_versions + certificates scanned > 0, printed as total scanned). "+
-			"Only if Check A is conclusive: the commit did not land; keep the old key. "+
-			"Only if Check B is conclusive: the commit landed; start miniKMS with the new key. "+
-			"If both checks scan zero rows, or neither is conclusive, the outcome stays unknown: "+
+			"Unset MINIKMS_ROOT_KEY before either check when the key is passed in MINIKMS_ROOT_KEY_FILE. "+
+			"Check A alone is not proof the commit did not land while the server can still finish it. "+
+			"Repeat both checks only after that database session is gone. "+
+			"Only if Check B is conclusive after that: the commit landed; start miniKMS with the new key. "+
+			"Only if Check A is conclusive and Check B is not, after that session is gone: the commit did not land; keep the old key. "+
+			"If that state cannot be established, or both checks scan zero rows, or neither is conclusive, the outcome stays unknown: "+
 			"keep miniKMS stopped and restore from the pre-rotation DB dump with the old key (or investigate). "+
 			"Delete the trial key file afterwards.\n\n")
 		fs.PrintDefaults()

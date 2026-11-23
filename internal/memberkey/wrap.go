@@ -39,6 +39,10 @@ var (
 	// ErrVerifyFailed means a wrapped row did not open to the same key material.
 	// No rows are updated.
 	ErrVerifyFailed = errors.New("member key wrap aborted because a wrapped row did not open to the same key material; no rows were updated")
+
+	// ErrNoWrappedAnchor means --confirm would rewrite legacy rows without an
+	// existing envelope that opens under this root key.
+	ErrNoWrappedAnchor = errors.New("member key wrap refused: no existing wrapped member key opened with this root key, so the configuration was not checked; no rows were updated")
 )
 
 // Row is one certificate record needed to classify member key material.
@@ -298,6 +302,9 @@ func apply(ctx context.Context, tx Tx, mgr *keys.OrgKeyManager, mode Mode, now t
 	if counted.failed > 0 {
 		return counted, fmt.Errorf("%w: failed=%d", ErrClassificationFailed, counted.failed)
 	}
+	if len(jobs) > 0 && counted.wrapped == 0 {
+		return counted, ErrNoWrappedAnchor
+	}
 	if err := wrapJobs(ctx, tx, jobs, cache, &scrub); err != nil {
 		return counted, err
 	}
@@ -329,6 +336,10 @@ func classify(rows []Row, mgr *keys.OrgKeyManager, mode Mode, now time.Time, scr
 		active := rowActive(row.Status, row.ExpiresAt, now)
 		switch kind {
 		case keys.MemberKeyWrapped:
+			if _, err := crypto.UnmarshalECPrivateKey(plain); err != nil {
+				counted.failed++
+				break
+			}
 			counted.addWrapped(active)
 		case keys.MemberKeyRaw:
 			counted.addRaw(active)

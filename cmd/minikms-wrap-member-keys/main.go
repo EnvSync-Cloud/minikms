@@ -14,6 +14,7 @@ import (
 )
 
 func main() {
+	ignoreSIGPIPE()
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 

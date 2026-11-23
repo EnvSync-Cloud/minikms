@@ -42,9 +42,12 @@ func NewPostgresStore(ctx context.Context, connString string) (*PostgresStore, e
 	if strings.TrimSpace(connString) == "" {
 		return nil, fmt.Errorf("database URL is required")
 	}
+	if err := validateDBTLSMode(connString); err != nil {
+		return nil, err
+	}
 	config, err := pgxpool.ParseConfig(connString)
 	if err != nil {
-		return nil, fmt.Errorf("connect to PostgreSQL: %w", err)
+		return nil, fmt.Errorf("connect to PostgreSQL: database URL is not a valid connection string")
 	}
 	config.MaxConns = 4
 	config.MinConns = 0
@@ -63,6 +66,27 @@ func NewPostgresStore(ctx context.Context, connString string) (*PostgresStore, e
 }
 
 // Close closes the pool.
+func validateDBTLSMode(connString string) error {
+	switch sslMode(connString) {
+	case "disable", "verify-ca", "verify-full":
+		return nil
+	default:
+		return fmt.Errorf("database URL must set sslmode=verify-full or sslmode=verify-ca; sslmode=disable is allowed only on a private network")
+	}
+}
+
+func sslMode(connString string) string {
+	lower := strings.ToLower(connString)
+	for _, part := range strings.FieldsFunc(lower, func(r rune) bool {
+		return r == ' ' || r == '&' || r == '?'
+	}) {
+		if strings.HasPrefix(part, "sslmode=") {
+			return strings.TrimPrefix(part, "sslmode=")
+		}
+	}
+	return ""
+}
+
 func (s *PostgresStore) Close() {
 	if s != nil && s.pool != nil {
 		s.pool.Close()
