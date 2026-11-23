@@ -81,15 +81,17 @@ func main() {
 	}
 	log.Println("Root key loaded successfully")
 
-	// Initialize stores
-	pgStore, err := store.NewPostgresStore(ctx, cfg.DBUrl)
+	// Initialize stores. Each dependency gets its own BootRetryTimeout. A slow
+	// Postgres does not consume the Redis budget, and the first failed ping
+	// does not exit.
+	pgStore, err := store.OpenPostgres(ctx, cfg.DBUrl)
 	if err != nil {
 		log.Fatalf("Failed to connect to PostgreSQL: %v", err)
 	}
 	defer pgStore.Close()
 	log.Println("PostgreSQL connected")
 
-	redisStore, err := store.NewRedisStore(ctx, cfg.RedisURL)
+	redisStore, err := store.OpenRedis(ctx, cfg.RedisURL)
 	if err != nil {
 		log.Fatalf("Failed to connect to Redis: %v", err)
 	}
