@@ -1,0 +1,364 @@
+# Release bump on dev.
+#
+# A merged pull request into dev gets one bump commit and one annotated rc tag.
+# Those refs are pushed with a GitHub App token so the tag push starts
+# .github/workflows/release.yaml. The workflow GITHUB_TOKEN is not used for writes.
+#
+# There is no push trigger. The bump commit is pushed straight to dev, so a push
+# trigger would run this workflow again on its own commit.
+#
+# pull_request_target is used because the job must read repository variables and
+# the app private key after a merge. That is safe here: the job checks out only
+# dev, and only after a human has merged the pull request. It never checks out
+# the pull request head ref and never runs code from that head. The app token
+# is used only with the already-merged dev branch.
+#
+# workflow_dispatch is the owner-run path. It tags the current dev tip.
+#
+# The bump commit does not include a skip-ci marker. CI still runs on that commit.
+
+name: Release bump (dev)
+
+on:
+  pull_request_target:
+    types: [closed]
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The default queue keeps one pending run and cancels older pending runs.
+# queue: max keeps them, so three merges that land close together each get an rc.
+concurrency:
+  group: release-bump-dev
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  bump:
+    name: Bump and tag rc
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard
+        id: guard
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ACTOR: ${{ github.actor }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          APP_SLUG: ${{ vars.RELEASE_APP_SLUG }}
+          APP_ID: ${{ vars.RELEASE_APP_ID }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          event_name="${EVENT_NAME:-}"
+          actor="${ACTOR:-}"
+          author="${AUTHOR:-}"
+          app_slug="${APP_SLUG:-}"
+          app_id="${APP_ID:-}"
+          pr_title="${PR_TITLE:-}"
+          pr_body="${PR_BODY:-}"
+          skip=false
+
+          message_has_prefix_line() {
+            MESSAGE="$1" PREFIX="$2" awk '
+              BEGIN {
+                n = split(ENVIRON["MESSAGE"], lines, "\n")
+                plen = length(ENVIRON["PREFIX"])
+                for (i = 1; i <= n; i++) {
+                  if (substr(lines[i], 1, plen) == ENVIRON["PREFIX"]) exit 0
+                }
+                exit 1
+              }
+            '
+          }
+
+          if [ -n "${app_slug}" ]; then
+            bot="${app_slug}[bot]"
+            if [ -n "${author}" ] && [ "${author}" = "${bot}" ]; then
+              echo "::notice::pull request author is ${bot}; no rc created"
+              skip=true
+            fi
+            if [ "${skip}" = "false" ] && [ "${actor}" = "${bot}" ]; then
+              echo "::notice::actor is ${bot}; no rc created"
+              skip=true
+            fi
+          fi
+
+          if [ "${skip}" = "false" ]; then
+            if message_has_prefix_line "${pr_title}" "Release-Version:" || message_has_prefix_line "${pr_body}" "Release-Version:"; then
+              echo "::notice::pull request text carries the release bump marker; no rc created"
+              skip=true
+            fi
+          fi
+
+          if [ -z "${app_id}" ]; then
+            echo "::warning::release app not configured; no rc created"
+            skip=true
+          fi
+
+          echo "skip=${skip}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create GitHub App token
+        id: app-token
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Checkout dev
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: true
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Setup Go
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Bump, tag, and push
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ vars.RELEASE_APP_SLUG }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number || 0 }}
+          PR_LABELS: ${{ github.event_name == 'pull_request_target' && toJson(github.event.pull_request.labels.*.name) || '[]' }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+
+          event_name="${EVENT_NAME:-}"
+          pr_number="${PR_NUMBER:-0}"
+          app_slug="${APP_SLUG:-}"
+          pr_labels="${PR_LABELS:-[]}"
+          merge_sha="${MERGE_SHA:-}"
+
+          case "${event_name}" in
+            pull_request_target|workflow_dispatch)
+              ;;
+            *)
+              echo "unexpected event ${event_name}" >&2
+              exit 1
+              ;;
+          esac
+          case "${pr_number}" in
+            *[!0-9]*)
+              echo "pull request number must be an integer" >&2
+              exit 1
+              ;;
+          esac
+          if [ "${event_name}" = "pull_request_target" ] && [ "${pr_number}" = "0" ]; then
+            echo "merged pull request is missing a number" >&2
+            exit 1
+          fi
+          if [ -z "${app_slug}" ]; then
+            echo "RELEASE_APP_SLUG is empty" >&2
+            exit 1
+          fi
+
+          bot_name="${app_slug}[bot]"
+          bot_id="$(gh api "/users/${bot_name}" --jq .id)"
+          case "${bot_id}" in
+            *[!0-9]*|'')
+              echo "release app user id is not an integer" >&2
+              exit 1
+              ;;
+          esac
+          bot_email="${bot_id}+${bot_name}@users.noreply.github.com"
+          export GIT_AUTHOR_NAME="${bot_name}"
+          export GIT_AUTHOR_EMAIL="${bot_email}"
+          export GIT_COMMITTER_NAME="${bot_name}"
+          export GIT_COMMITTER_EMAIL="${bot_email}"
+          git config user.name "${bot_name}"
+          git config user.email "${bot_email}"
+          git config commit.gpgsign false
+          git config tag.gpgsign false
+
+          message_has_exact_line() {
+            MESSAGE="$1" LINE="$2" awk '
+              BEGIN {
+                n = split(ENVIRON["MESSAGE"], lines, "\n")
+                for (i = 1; i <= n; i++) if (lines[i] == ENVIRON["LINE"]) exit 0
+                exit 1
+              }
+            '
+          }
+
+          message_has_prefix_line() {
+            MESSAGE="$1" PREFIX="$2" awk '
+              BEGIN {
+                n = split(ENVIRON["MESSAGE"], lines, "\n")
+                plen = length(ENVIRON["PREFIX"])
+                for (i = 1; i <= n; i++) {
+                  if (substr(lines[i], 1, plen) == ENVIRON["PREFIX"]) exit 0
+                }
+                exit 1
+              }
+            '
+          }
+
+          history_has_exact_line() {
+            git log --format='%B%x00' | LINE="$1" awk '
+              BEGIN { wanted = ENVIRON["LINE"] }
+              {
+                gsub(/\0/, "\n")
+                n = split($0, lines, "\n")
+                for (i = 1; i <= n; i++) if (lines[i] == wanted) found = 1
+              }
+              END { exit found ? 0 : 1 }
+            '
+          }
+
+          label=""
+          case "${pr_labels}" in
+            *'"release:major"'*)
+              label="release:major"
+              ;;
+            *'"release:minor"'*)
+              label="release:minor"
+              ;;
+            *'"release:patch"'*)
+              label="release:patch"
+              ;;
+          esac
+
+          sync_dev() {
+            git fetch --tags origin refs/heads/dev
+            tip="$(git ls-remote origin refs/heads/dev | awk 'NR==1 { print $1 }')"
+            if ! printf '%s' "${tip}" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "unexpected origin/dev tip: ${tip}" >&2
+              exit 1
+            fi
+            if ! git cat-file -e "${tip}^{commit}" 2>/dev/null; then
+              git fetch origin "${tip}"
+            fi
+            git reset --hard "${tip}"
+          }
+
+          created_tag=""
+          attempt=1
+          while [ "${attempt}" -le 5 ]; do
+            sync_dev
+
+            if [ -n "${merge_sha}" ] && git cat-file -e "${merge_sha}^{commit}" 2>/dev/null; then
+              merge_msg="$(git log -1 --format=%B "${merge_sha}")"
+              if message_has_prefix_line "${merge_msg}" "Release-Version:"; then
+                echo "::notice::merge commit carries the release bump marker; no rc created"
+                exit 0
+              fi
+            fi
+
+            pr_line="Release-PR: ${pr_number}"
+            head_msg="$(git log -1 --format=%B HEAD)"
+            head_has_pr=false
+            if message_has_exact_line "${head_msg}" "${pr_line}"; then
+              head_has_pr=true
+            fi
+            tip_tags="$(git tag --points-at HEAD --list 'v*')"
+
+            if [ "${event_name}" = "workflow_dispatch" ]; then
+              if [ -n "${tip_tags}" ]; then
+                echo "::notice::dev tip is already tagged; no rc created"
+                exit 0
+              fi
+            else
+              if [ -n "${tip_tags}" ] && [ "${head_has_pr}" = "true" ]; then
+                echo "::notice::dev tip tag already covers pull request ${pr_number}; no rc created"
+                exit 0
+              fi
+              if history_has_exact_line "${pr_line}"; then
+                echo "::notice::a bump commit for pull request ${pr_number} is already on dev; no rc created"
+                exit 0
+              fi
+            fi
+
+            if [ -n "${label}" ]; then
+              version="$(go run -mod=readonly ./cmd/release-bump next -label "${label}")"
+            else
+              version="$(go run -mod=readonly ./cmd/release-bump next)"
+            fi
+            if ! printf '%s' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-rc\.[1-9][0-9]*$'; then
+              echo "release-bump next returned an unexpected version: ${version}" >&2
+              exit 1
+            fi
+            tag="v${version}"
+
+            if git show-ref --verify --quiet "refs/tags/${tag}"; then
+              echo "tag ${tag} already exists locally; not overwriting it" >&2
+              exit 1
+            fi
+            if [ -n "$(git ls-remote --tags origin "refs/tags/${tag}")" ]; then
+              echo "tag ${tag} already exists on origin; not overwriting it" >&2
+              exit 1
+            fi
+
+            go run -mod=readonly ./cmd/release-bump "${version}"
+            git add -- VERSION
+            if git diff --cached --quiet; then
+              echo "VERSION did not change for ${version}" >&2
+              exit 1
+            fi
+
+            msg_file="$(mktemp)"
+            {
+              printf 'chore(release): %s\n\n' "${tag}"
+              printf 'Release-Version: %s\n' "${version}"
+              printf 'Release-PR: %s\n' "${pr_number}"
+            } > "${msg_file}"
+            git commit -F "${msg_file}"
+            rm -f "${msg_file}"
+            git tag -a "${tag}" -m "chore(release): ${tag}"
+            created_tag="${tag}"
+
+            push_log="$(mktemp)"
+            if git push --atomic origin "HEAD:refs/heads/dev" "refs/tags/${tag}" >"${push_log}" 2>&1; then
+              cat "${push_log}"
+              rm -f "${push_log}"
+              sha="$(git rev-parse HEAD)"
+              {
+                echo "### Release candidate"
+                echo ""
+                echo "- Version: \`${version}\`"
+                echo "- Tag: \`${tag}\`"
+                echo "- Commit: \`${sha}\`"
+                echo "- PR: ${pr_number}"
+              } >> "${GITHUB_STEP_SUMMARY}"
+              echo "tagged ${tag} at ${sha} for pull request ${pr_number}"
+              exit 0
+            fi
+            cat "${push_log}"
+            if grep -F "already exists" "${push_log}" >/dev/null; then
+              echo "tag ${tag} already exists on origin; not overwriting or deleting it" >&2
+              rm -f "${push_log}"
+              exit 1
+            fi
+            dev_moved=false
+            if grep -E 'non-fast-forward|fetch first|tip of your current branch is behind' "${push_log}" >/dev/null; then
+              dev_moved=true
+            fi
+            rm -f "${push_log}"
+            if [ "${dev_moved}" != "true" ]; then
+              echo "git push failed; the rc tag was not pushed" >&2
+              exit 1
+            fi
+            if [ "${attempt}" -eq 5 ]; then
+              echo "dev moved before the bump could be pushed; tried 5 times and stopped" >&2
+              exit 1
+            fi
+            echo "dev moved; recomputing the rc (attempt ${attempt} of 5)"
+            git tag -d "${created_tag}"
+            created_tag=""
+            attempt=$((attempt + 1))
+          done
+          echo "dev moved before the bump could be pushed; tried 5 times and stopped" >&2
+          exit 1

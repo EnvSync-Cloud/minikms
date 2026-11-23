@@ -400,7 +400,9 @@ make bump SPEC=0.3.0     # set an explicit version
 
 `patch`, `minor`, and `major` bump the numeric core and write a stable version. On `0.2.0-rc.1`, `patch` writes `0.2.1`. Use `stable` to drop the rc suffix and keep the same core.
 
-Commit `VERSION`, then push a tag that is `v` plus the file contents, such as `v0.2.0` or `v0.2.0-rc.1`. The release workflow accepts those tags. It checks `VERSION` against the tag, builds `linux/amd64` and `linux/arm64` images, and creates a GitHub release.
+Rc tags are created automatically by the bump workflow on merges into `dev`. The workflow writes the next `X.Y.Z-rc.N` into `VERSION`, commits it, and pushes an annotated `vX.Y.Z-rc.N` tag. A manual rc tag push is only an owner-run fallback. An owner can also run the bump workflow with `workflow_dispatch` to tag the current `dev` tip. Stable tags are still created by hand. Commit the `VERSION` change first, then tag that commit, so `VERSION` matches the tag. Stable promotion will be automated in a later phase.
+
+The release workflow accepts tags `vX.Y.Z` and `vX.Y.Z-rc.N`. It checks `VERSION` against the tag, builds `linux/amd64` and `linux/arm64` images, and creates a GitHub release. App install, permissions, and repository variables are in [docs/release-app.md](docs/release-app.md).
 
 A stable tag publishes image tags `X.Y.Z`, `X.Y`, `latest`, `stable`, and `sha-<short>`, and is marked as the latest GitHub release. An rc tag publishes only `X.Y.Z-rc.N` and `sha-<short>`. That image is a prerelease and does not move `latest` or `stable`.
 
