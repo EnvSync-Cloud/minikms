@@ -566,7 +566,8 @@ func (m *MockPKICertStore) RevokeCertificate(ctx context.Context, serial string,
 	}
 	prevStatus := rec.Status
 	rec.Status = "revoked"
-	m.crls[entry.IssuerSerial] = append(m.crls[entry.IssuerSerial], *entry)
+	added := *entry
+	m.crls[added.IssuerSerial] = append(m.crls[added.IssuerSerial], added)
 	revoker := m.tokenRevoker
 	m.mu.Unlock()
 
@@ -576,14 +577,22 @@ func (m *MockPKICertStore) RevokeCertificate(ctx context.Context, serial string,
 	if err := revoker.RevokeTokensByCertSerial(ctx, serial); err != nil {
 		m.mu.Lock()
 		rec.Status = prevStatus
-		entries := m.crls[entry.IssuerSerial]
-		if n := len(entries); n > 0 {
-			m.crls[entry.IssuerSerial] = entries[:n-1]
-		}
+		m.crls[added.IssuerSerial] = dropCRLEntry(m.crls[added.IssuerSerial], added)
 		m.mu.Unlock()
 		return err
 	}
 	return nil
+}
+
+// dropCRLEntry removes the row this revocation appended. A later row for the
+// same issuer is left in place.
+func dropCRLEntry(entries []CRLEntryRecord, want CRLEntryRecord) []CRLEntryRecord {
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i] == want {
+			return append(entries[:i], entries[i+1:]...)
+		}
+	}
+	return entries
 }
 
 func (m *MockPKICertStore) InsertCRLEntry(_ context.Context, entry *CRLEntryRecord) error {

@@ -171,6 +171,54 @@ func TestMockPKICertStore_RevokeCertificateRollsBack(t *testing.T) {
 	}
 }
 
+func TestMockPKICertStore_RevokeCertificateRollbackKeepsOtherCRL(t *testing.T) {
+	ctx := context.Background()
+	certs := NewMockPKICertStore()
+	if err := certs.StoreCertificate(ctx, &pkistore.CertRecord{
+		SerialNumber: "serial-1",
+		CertType:     "member",
+		OrgID:        "org-1",
+		SubjectCN:    "member",
+		CertPEM:      "cert",
+		Status:       "active",
+		IssuedAt:     time.Now().Add(-time.Hour),
+		ExpiresAt:    time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("StoreCertificate: %v", err)
+	}
+	otherAt := time.Now().UTC().Add(time.Second)
+	certs.BindTokenRevoker(crlThenFailRevoker{certs: certs, at: otherAt})
+
+	err := certs.RevokeCertificate(ctx, "serial-1", &pkistore.CRLEntryRecord{
+		CertSerial: "serial-1", IssuerSerial: "issuer", RevokedAt: time.Now().UTC(),
+	})
+	if err == nil {
+		t.Fatal("expected token revoke error")
+	}
+	revoked, getErr := certs.GetCertRevocationEntry(ctx, "serial-1")
+	if getErr != nil || revoked != nil {
+		t.Fatalf("failed revoke CRL = %+v err=%v", revoked, getErr)
+	}
+	other, getErr := certs.GetCertRevocationEntry(ctx, "other-serial")
+	if getErr != nil || other == nil || !other.RevokedAt.Equal(otherAt) {
+		t.Fatalf("other CRL = %+v err=%v", other, getErr)
+	}
+}
+
+type crlThenFailRevoker struct {
+	certs *MockPKICertStore
+	at    time.Time
+}
+
+func (r crlThenFailRevoker) RevokeTokensByCertSerial(ctx context.Context, _ string) error {
+	if err := r.certs.InsertCRLEntry(ctx, &pkistore.CRLEntryRecord{
+		CertSerial: "other-serial", IssuerSerial: "issuer", RevokedAt: r.at,
+	}); err != nil {
+		return err
+	}
+	return errors.New("token revoke failed")
+}
+
 type errTokenRevoker struct{}
 
 func (errTokenRevoker) RevokeTokensByCertSerial(context.Context, string) error {
