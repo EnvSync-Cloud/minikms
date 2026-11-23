@@ -14,7 +14,7 @@ type CertRecord struct {
 	EnvID               string
 	SubjectCN           string
 	CertPEM             string
-	EncryptedPrivateKey []byte // For managed members: encrypted private key bytes
+	EncryptedPrivateKey []byte // Envelope-encrypted private key material when the row stores one
 	Status              string // active, revoked, expired
 	IssuedAt            time.Time
 	ExpiresAt           time.Time
@@ -44,6 +44,12 @@ type Store interface {
 	GetCRLEntries(ctx context.Context, issuerSerial string) ([]CRLEntryRecord, error)
 	GetNextCRLNumber(ctx context.Context, issuerSerial string) (int64, error)
 	GetCertRevocationEntry(ctx context.Context, serialNumber string) (*CRLEntryRecord, error)
+}
+
+// CertificateRevoker commits a certificate revocation and ends sessions for
+// that serial together. PostgresStore does the writes in one database transaction.
+type CertificateRevoker interface {
+	RevokeCertificate(ctx context.Context, serialNumber string, entry *CRLEntryRecord) error
 }
 
 // OrgCABootstrapLocker serializes organization CA creation across replicas.

@@ -44,10 +44,15 @@ type VaultStore interface {
 //	Layer 3: KMS envelope encryption — happens here on write/read
 type VaultService struct {
 	dekManager     *keys.AppDEKManager
+	orgKeyMgr      *keys.OrgKeyManager
 	orgCAWrapMgr   *keys.OrgCAWrapManager
 	vaultStore     VaultStore
 	auditLogger    *audit.AuditLogger
 	sessionService *SessionService
+	// memberKeyLegacyRead allows opening managed member key rows that are not yet
+	// stored as member-key envelopes.
+	// TODO: remove the legacy member-key read path after the member-key wrap backfill check passes.
+	memberKeyLegacyRead bool
 }
 
 // NewVaultService creates a new VaultService.
@@ -59,11 +64,28 @@ func NewVaultService(
 	sessionService *SessionService,
 ) *VaultService {
 	return &VaultService{
-		dekManager:     dekManager,
-		orgCAWrapMgr:   orgCAWrapMgr,
-		vaultStore:     vaultStore,
-		auditLogger:    auditLogger,
-		sessionService: sessionService,
+		dekManager:          dekManager,
+		orgCAWrapMgr:        orgCAWrapMgr,
+		vaultStore:          vaultStore,
+		auditLogger:         auditLogger,
+		sessionService:      sessionService,
+		memberKeyLegacyRead: true,
+	}
+}
+
+// SetOrgKeyManager supplies the organization key used to open managed member key envelopes.
+func (v *VaultService) SetOrgKeyManager(mgr *keys.OrgKeyManager) {
+	if v != nil {
+		v.orgKeyMgr = mgr
+	}
+}
+
+// SetMemberKeyLegacyRead controls whether managed member key rows that are not
+// yet stored as member-key envelopes can still be opened.
+// TODO: remove the legacy member-key read path after the member-key wrap backfill check passes.
+func (v *VaultService) SetMemberKeyLegacyRead(enabled bool) {
+	if v != nil {
+		v.memberKeyLegacyRead = enabled
 	}
 }
 
@@ -597,9 +619,42 @@ func (v *VaultService) eciesDecryptWithDurableOrgCA(ctx context.Context, orgID s
 	return crypto.ECIESDecrypt(orgCAKey, eciesOutput, "envsync-ecies-v1", orgID, []byte(orgID))
 }
 
+// loadMemberPrivateKey opens managed member key material from a certificate row.
+// The key is unwrapped in memory only.
+func (v *VaultService) loadMemberPrivateKey(orgID string, record *pkistore.CertRecord) (*ecdsa.PrivateKey, error) {
+	if record == nil || len(record.EncryptedPrivateKey) == 0 {
+		return nil, NewDomainError(ErrorFailedPrecondition, "managed member key is not available", nil)
+	}
+	if record.CertType != "" && record.CertType != "member" {
+		return nil, NewDomainError(ErrorFailedPrecondition, "managed member key is not available", nil)
+	}
+	if v.orgKeyMgr == nil {
+		return nil, internalError("organization key manager is not configured", nil)
+	}
+	if record.OrgID != "" {
+		orgID = record.OrgID
+	}
+	// TODO: remove the legacy member-key read path after the member-key wrap backfill check passes.
+	key, err := keys.OpenMemberPrivateKey(v.orgKeyMgr, orgID, record.SerialNumber, record.EncryptedPrivateKey, v.memberKeyLegacyRead)
+	if err != nil {
+		return nil, memberKeyReadError(err)
+	}
+	return key, nil
+}
+
+func memberKeyReadError(err error) error {
+	switch {
+	case errors.Is(err, keys.ErrMemberKeyUnavailable):
+		return NewDomainError(ErrorFailedPrecondition, "managed member key is not available", nil)
+	case errors.Is(err, keys.ErrMemberKeyLegacyDisabled):
+		return NewDomainError(ErrorFailedPrecondition, keys.ErrMemberKeyLegacyDisabled.Error(), nil)
+	default:
+		return NewDomainError(ErrorFailedPrecondition, "managed member key envelope could not be opened", nil)
+	}
+}
+
 // unwrapOrgCAForManagedMember recovers the Org CA private key for a managed member.
-// For managed members, the server has access to the member's encrypted private key
-// stored in the certificates table.
+// The member key material is loaded from the certificate row and opened in memory.
 func (v *VaultService) unwrapOrgCAForManagedMember(ctx context.Context, orgID, memberID string) (*ecdsa.PrivateKey, error) {
 	// Get the member's wrap record to find their cert serial
 	wrapRecord, err := v.vaultStore.GetOrgCAWrap(ctx, orgID, memberID)
@@ -615,17 +670,9 @@ func (v *VaultService) unwrapOrgCAForManagedMember(ctx context.Context, orgID, m
 	if err != nil {
 		return nil, internalError("failed to get member certificate", err)
 	}
-	if certRecord == nil {
-		return nil, NewDomainError(ErrorFailedPrecondition, "managed member key is not available", nil)
-	}
-	if len(certRecord.EncryptedPrivateKey) == 0 {
-		return nil, NewDomainError(ErrorFailedPrecondition, "managed member key is not available", nil)
-	}
-
-	// Deserialize the managed member's private key
-	memberPrivKey, err := crypto.UnmarshalECPrivateKey(certRecord.EncryptedPrivateKey)
+	memberPrivKey, err := v.loadMemberPrivateKey(orgID, certRecord)
 	if err != nil {
-		return nil, internalError("failed to decode managed member key", err)
+		return nil, err
 	}
 
 	// Unwrap the Org CA key using the member's private key via the manager

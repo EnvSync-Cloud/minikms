@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/envsync-cloud/minikms/internal/audit"
+	"github.com/envsync-cloud/minikms/internal/auth"
 	"github.com/envsync-cloud/minikms/internal/crypto"
 	"github.com/envsync-cloud/minikms/internal/escrow"
 	"github.com/envsync-cloud/minikms/internal/keys"
@@ -331,6 +332,88 @@ func TestRevokeCert(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error revoking already-revoked cert")
+	}
+}
+
+func TestRevokeCert_EndsSessionsForSerial(t *testing.T) {
+	svc, _, _, certStore := setupPKIWithStore(t)
+	ctx := context.Background()
+	registry := testutil.NewMockTokenRegistry()
+	certStore.BindTokenRevoker(registry)
+	registry.BindCertificateStatus(func(ctx context.Context, serial string) (string, bool, error) {
+		rec, err := certStore.GetCertificateBySerial(ctx, serial)
+		if err != nil || rec == nil {
+			return "", false, err
+		}
+		return rec.Status, true, nil
+	})
+
+	_, orgCACert, orgCAKey, _, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: "org-001", OrgName: "Test Org",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrgCAFull: %v", err)
+	}
+	revokedMember, err := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
+		MemberID: "m1", MemberEmail: "m1@test.com", OrgID: "org-001",
+		Role: "member", OrgCACert: orgCACert, OrgCAKey: orgCAKey,
+	})
+	if err != nil {
+		t.Fatalf("IssueMemberCert: %v", err)
+	}
+	liveMember, err := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
+		MemberID: "m2", MemberEmail: "m2@test.com", OrgID: "org-001",
+		Role: "admin", OrgCACert: orgCACert, OrgCAKey: orgCAKey,
+	})
+	if err != nil {
+		t.Fatalf("IssueMemberCert control: %v", err)
+	}
+
+	store := func(jti, serial string) {
+		t.Helper()
+		if err := registry.StoreToken(ctx, &auth.TokenEntry{
+			JTI:         jti,
+			SubjectHash: "subject",
+			JWTHash:     "hash",
+			IssuedAt:    time.Now(),
+			ExpiresAt:   time.Now().Add(time.Hour),
+			CertSerial:  serial,
+		}); err != nil {
+			t.Fatalf("StoreToken %s: %v", jti, err)
+		}
+	}
+	store("session-a", revokedMember.SerialHex)
+	store("session-b", revokedMember.SerialHex)
+	store("session-live", liveMember.SerialHex)
+	store("non-cert", "")
+
+	if err := svc.RevokeCert(ctx, &RevokeCertRequest{
+		SerialHex: revokedMember.SerialHex, OrgID: "org-001", Reason: 0,
+	}); err != nil {
+		t.Fatalf("RevokeCert: %v", err)
+	}
+
+	for _, jti := range []string{"session-a", "session-b"} {
+		got, err := registry.GetToken(ctx, jti)
+		if err != nil || got == nil || !got.Revoked || got.CertStatus != "revoked" {
+			t.Fatalf("%s after revoke = %+v err=%v", jti, got, err)
+		}
+	}
+	live, err := registry.GetToken(ctx, "session-live")
+	if err != nil || live == nil || live.Revoked || live.CertStatus != "active" {
+		t.Fatalf("control session = %+v err=%v", live, err)
+	}
+	nonCert, err := registry.GetToken(ctx, "non-cert")
+	if err != nil || nonCert == nil || nonCert.Revoked || nonCert.CertSerial != "" {
+		t.Fatalf("non-cert token = %+v err=%v", nonCert, err)
+	}
+	rec, err := certStore.GetCertificateBySerial(ctx, revokedMember.SerialHex)
+	if err != nil || rec == nil || rec.Status != "revoked" {
+		t.Fatalf("certificate status = %+v err=%v", rec, err)
+	}
+	crl, err := certStore.GetCertRevocationEntry(ctx, revokedMember.SerialHex)
+	if err != nil || crl == nil || crl.CertSerial != revokedMember.SerialHex {
+		t.Fatalf("crl entry = %+v err=%v", crl, err)
 	}
 }
 
@@ -733,6 +816,88 @@ func TestIssueMemberCert_PrivateKeyRoundtrip(t *testing.T) {
 	pubKey := cert.PublicKey.(*ecdsa.PublicKey)
 	if !pubKey.Equal(&privKey.PublicKey) {
 		t.Error("private key does not match certificate public key")
+	}
+}
+
+func TestIssueMemberCert_PersistsWrappedKey(t *testing.T) {
+	svc, _, _, certStore := setupPKIWithStore(t)
+	ctx := context.Background()
+	const orgID = "org-member-wrap"
+
+	_, orgCACert, orgCAKey, _, err := svc.CreateOrgCAFull(ctx, &CreateOrgCARequest{
+		OrgID: orgID, OrgName: "Member Wrap Org",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrgCAFull: %v", err)
+	}
+
+	resp, err := svc.IssueMemberCert(ctx, &IssueMemberCertRequest{
+		MemberID: "m-wrap", MemberEmail: "wrap@test.com", OrgID: orgID,
+		Role: "admin", OrgCACert: orgCACert, OrgCAKey: orgCAKey,
+	})
+	if err != nil {
+		t.Fatalf("IssueMemberCert: %v", err)
+	}
+	if resp.KeyPEM == "" || resp.CertPEM == "" || resp.SerialHex == "" {
+		t.Fatal("IssueMemberCert returned an empty certificate or key")
+	}
+
+	certBlock, _ := pem.Decode([]byte(resp.CertPEM))
+	if certBlock == nil {
+		t.Fatal("certificate PEM did not decode")
+	}
+	keyBlock, _ := pem.Decode([]byte(resp.KeyPEM))
+	if keyBlock == nil {
+		t.Fatal("key PEM did not decode")
+	}
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+	privKey, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	if err != nil {
+		t.Fatalf("ParseECPrivateKey: %v", err)
+	}
+	pubKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatal("issued certificate public key is not ECDSA")
+	}
+	if !pubKey.Equal(&privKey.PublicKey) {
+		t.Fatal("KeyPEM does not match the issued certificate")
+	}
+
+	rec, err := certStore.GetCertificateBySerialWithKey(ctx, resp.SerialHex)
+	if err != nil {
+		t.Fatalf("stored member certificate: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("stored member certificate is missing")
+	}
+	legacy := crypto.MarshalECPrivateKey(privKey)
+	defer crypto.ZeroizeBytes(legacy)
+	if bytes.Equal(rec.EncryptedPrivateKey, legacy) {
+		t.Fatal("persisted member key material is the legacy encoding")
+	}
+
+	orgKey, err := svc.orgKeyMgr.DeriveOrgKey(orgID)
+	if err != nil {
+		t.Fatalf("derive organization key: %v", err)
+	}
+	defer crypto.ZeroizeBytes(orgKey)
+
+	opened, err := crypto.Decrypt(orgKey, rec.EncryptedPrivateKey, []byte(keys.MemberKeyAAD(orgID, resp.SerialHex)))
+	if err != nil {
+		t.Fatal("persisted member key material did not open with the member-key associated data")
+	}
+	defer crypto.ZeroizeBytes(opened)
+	if !bytes.Equal(opened, legacy) {
+		t.Fatal("member-key envelope did not open to the issued key")
+	}
+
+	other, err := crypto.Decrypt(orgKey, rec.EncryptedPrivateKey, []byte(orgCAKeyAAD(orgID, resp.SerialHex)))
+	if err == nil {
+		crypto.ZeroizeBytes(other)
+		t.Fatal("member key material opened with organization CA associated data")
 	}
 }
 
