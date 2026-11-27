@@ -79,6 +79,10 @@ jobs:
           push: true
           tags: ${{ steps.rel.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # GHCR reads the description from the multi-arch index, not the image config.
+          annotations: |
+            index:org.opencontainers.image.description=A lightweight, tenant-aware Key Management Service built in Go
+            manifest:org.opencontainers.image.description=A lightweight, tenant-aware Key Management Service built in Go
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
