@@ -3,11 +3,18 @@ package authn
 
 import "context"
 
+const (
+	// KindUser is a caller bound from a forwarded proof. An empty Kind is the session principal.
+	KindUser = "user"
+)
+
 // Principal is the caller established by a validated session token.
 type Principal struct {
 	TenantID string // JWT org_id or org
-	ActorID  string // JWT subject
+	ActorID  string // JWT subject, or the forwarded proof subject when Kind is user
 	Role     string // JWT role; empty is not an org admin
+	Kind     string // KindUser when a forwarded proof was accepted
+	JKT      string // thumbprint of the accepted proof key
 }
 
 type principalContextKey struct{}

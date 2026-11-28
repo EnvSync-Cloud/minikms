@@ -24,6 +24,7 @@ import (
 	"github.com/envsync-cloud/minikms/internal/auth"
 	"github.com/envsync-cloud/minikms/internal/config"
 	"github.com/envsync-cloud/minikms/internal/crypto"
+	"github.com/envsync-cloud/minikms/internal/dpop"
 	"github.com/envsync-cloud/minikms/internal/escrow"
 	grpcadapter "github.com/envsync-cloud/minikms/internal/grpc"
 	"github.com/envsync-cloud/minikms/internal/intercept"
@@ -64,6 +65,9 @@ func main() {
 
 	cfg, err := config.Load()
 	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+	if err := cfg.ValidateDPoP(); err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 	if !cfg.TLSEnabled && !cfg.MayServePlaintext() {
@@ -219,7 +223,23 @@ func main() {
 	} else {
 		log.Printf("WARNING: serving without TLS because MINIKMS_ALLOW_INSECURE=true (local development only)")
 	}
-	opts = append(opts, intercept.ServerOptions(auth.NewJWTValidator(pgStore), limiter)...)
+	mode, err := dpop.ParseMode(cfg.DPoPMode)
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+	proofs := &dpop.Checker{
+		Mode:           mode,
+		Issuer:         cfg.DPoPIssuer,
+		Audience:       cfg.DPoPAudience,
+		AllowedOrigins: dpop.SplitOrigins(cfg.DPoPAllowedHTUOrigins),
+		MaxAge:         time.Duration(cfg.DPoPMaxProofAgeSec) * time.Second,
+		MaxCalls:       cfg.DPoPMaxCallsPerProof,
+		Replay:         dpop.NewRedisReplay(redisStore.Client()),
+	}
+	if mode != dpop.ModeOff {
+		proofs.Keyfunc = dpop.NewJWKS(cfg.DPoPJWKSURL).Keyfunc
+	}
+	opts = append(opts, intercept.ServerOptionsWithDPoP(auth.NewJWTValidator(pgStore), limiter, proofs)...)
 
 	grpcServer := grpc.NewServer(opts...)
 

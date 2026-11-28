@@ -1,6 +1,10 @@
 package config
 
-import "github.com/kelseyhightower/envconfig"
+import (
+	"fmt"
+
+	"github.com/kelseyhightower/envconfig"
+)
 
 // Config holds all miniKMS configuration loaded from environment variables.
 type Config struct {
@@ -54,6 +58,16 @@ type Config struct {
 	EscrowSealKey     string `envconfig:"MINIKMS_ESCROW_SEAL_KEY"`
 	EscrowSealKeyFile string `envconfig:"MINIKMS_ESCROW_SEAL_KEY_FILE"`
 	EscrowCustodians  string `envconfig:"MINIKMS_ESCROW_CUSTODIANS" default:"custodian-1,custodian-2,custodian-3,custodian-4,custodian-5"`
+
+	// Forwarded-proof check. off is the standalone default. monitor and enforce
+	// require the issuer, JWKS, audience, and allowed htu origins.
+	DPoPMode              string `envconfig:"MINIKMS_DPOP_MODE" default:"off"`
+	DPoPIssuer            string `envconfig:"MINIKMS_DPOP_ISSUER"`
+	DPoPJWKSURL           string `envconfig:"MINIKMS_DPOP_JWKS_URL"`
+	DPoPAudience          string `envconfig:"MINIKMS_DPOP_AUDIENCE"`
+	DPoPAllowedHTUOrigins string `envconfig:"MINIKMS_DPOP_ALLOWED_HTU_ORIGINS"`
+	DPoPMaxProofAgeSec    int    `envconfig:"MINIKMS_DPOP_MAX_PROOF_AGE_SEC" default:"60"`
+	DPoPMaxCallsPerProof  int    `envconfig:"MINIKMS_DPOP_MAX_CALLS_PER_PROOF" default:"16"`
 }
 
 // Load reads config from environment variables.
@@ -70,4 +84,22 @@ func Load() (*Config, error) {
 // Startup without TLS and without AllowInsecure fails this check.
 func (c Config) MayServePlaintext() bool {
 	return !c.TLSEnabled && c.AllowInsecure
+}
+
+// ValidateDPoP rejects a monitor or enforce floor that cannot verify tokens.
+func (c Config) ValidateDPoP() error {
+	switch c.DPoPMode {
+	case "", "off":
+		return nil
+	case "monitor", "enforce":
+		if c.DPoPIssuer == "" || c.DPoPJWKSURL == "" || c.DPoPAudience == "" || c.DPoPAllowedHTUOrigins == "" {
+			return fmt.Errorf("MINIKMS_DPOP_MODE=%s requires MINIKMS_DPOP_ISSUER, MINIKMS_DPOP_JWKS_URL, MINIKMS_DPOP_AUDIENCE, and MINIKMS_DPOP_ALLOWED_HTU_ORIGINS", c.DPoPMode)
+		}
+		if c.DPoPMaxProofAgeSec <= 0 || c.DPoPMaxCallsPerProof <= 0 {
+			return fmt.Errorf("dpop freshness window and call budget must be positive")
+		}
+		return nil
+	default:
+		return fmt.Errorf("MINIKMS_DPOP_MODE must be off, monitor, or enforce")
+	}
 }
