@@ -15,7 +15,7 @@ func TestPrincipalRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("principal missing from context")
 	}
-	if got != want {
+	if got.TenantID != want.TenantID || got.ActorID != want.ActorID || got.Role != want.Role {
 		t.Fatalf("principal = %+v, want %+v", got, want)
 	}
 

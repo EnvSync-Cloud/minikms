@@ -57,6 +57,9 @@ func (s *KMSService) Encrypt(ctx context.Context, req *EncryptRequest) (*Encrypt
 	if err != nil {
 		return nil, err
 	}
+	if err := requireScope(principal, "vault:write"); err != nil {
+		return nil, err
+	}
 
 	dek, keyVersionID, err := s.dekManager.GetOrCreateDEK(ctx, principal.TenantID, req.ScopeID)
 	if err != nil {
@@ -125,6 +128,9 @@ func (s *KMSService) Decrypt(ctx context.Context, req *DecryptRequest) (*Decrypt
 	if err != nil {
 		return nil, err
 	}
+	if err := requireScope(principal, "vault:read"); err != nil {
+		return nil, err
+	}
 
 	ciphertext, err := base64.StdEncoding.DecodeString(req.Ciphertext)
 	if err != nil {
@@ -184,6 +190,9 @@ func (s *KMSService) BatchEncrypt(ctx context.Context, req *BatchEncryptRequest)
 	if err != nil {
 		return nil, err
 	}
+	if err := requireScope(principal, "vault:write"); err != nil {
+		return nil, err
+	}
 
 	dek, keyVersionID, err := s.dekManager.GetOrCreateDEK(ctx, principal.TenantID, req.ScopeID)
 	if err != nil {
@@ -234,6 +243,9 @@ func (s *KMSService) BatchDecrypt(ctx context.Context, req *BatchDecryptRequest)
 	}
 	principal, err := authenticatedTenant(ctx, req.TenantID)
 	if err != nil {
+		return nil, err
+	}
+	if err := requireScope(principal, "vault:read"); err != nil {
 		return nil, err
 	}
 	for i, item := range req.Items {

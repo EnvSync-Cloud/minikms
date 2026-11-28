@@ -181,6 +181,7 @@ func (c *chain) authenticate(ctx context.Context, fullMethod string) (context.Co
 		TenantID: tenantID,
 		ActorID:  actorID,
 		Role:     claims.Role,
+		Scopes:   entry.Scopes,
 	}), nil
 }
 

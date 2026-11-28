@@ -153,6 +153,7 @@ func kmsPrincipalCtx(tenantID string) context.Context {
 	return authn.WithPrincipal(context.Background(), authn.Principal{
 		TenantID: tenantID,
 		ActorID:  "session-" + tenantID,
+		Scopes:   []string{"vault:read", "vault:write"},
 	})
 }
 

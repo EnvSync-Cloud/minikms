@@ -239,7 +239,7 @@ func TestAuthInterceptorSetsPrincipal(t *testing.T) {
 	default:
 		t.Fatal("principal was not stored")
 	}
-	if got != (authn.Principal{TenantID: "tenant-org", ActorID: "actor-org"}) {
+	if got.TenantID != "tenant-org" || got.ActorID != "actor-org" || got.Role != "" {
 		t.Fatalf("principal = %+v", got)
 	}
 	if keys := lim.snapshot(); len(keys) != 1 || keys[0] != "p:tenant-org:actor-org" {
@@ -256,13 +256,37 @@ func TestAuthInterceptorSetsPrincipal(t *testing.T) {
 		if !ok {
 			t.Fatal("missing principal")
 		}
-		if p != (authn.Principal{TenantID: "tenant-session", ActorID: "actor-session", Role: "admin"}) {
+		if p.TenantID != "tenant-session" || p.ActorID != "actor-session" || p.Role != "admin" {
 			t.Fatalf("session principal = %+v", p)
 		}
 		return nil, nil
 	})
 	if err != nil {
 		t.Fatalf("session org claim: %v", err)
+	}
+}
+
+func TestAuthInterceptorCopiesScopes(t *testing.T) {
+	raw := signToken(t, jwt.MapClaims{
+		"jti": "jti-scopes",
+		"sub": "actor-scopes",
+		"org": "tenant-scopes",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	c := &chain{validator: &fakeValidator{scopes: []string{"vault:read"}}, limiter: &fakeLimiter{allow: true}}
+	inCtx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+raw))
+	_, err := c.authUnary(inCtx, nil, &grpc.UnaryServerInfo{FullMethod: pb.KMSService_Decrypt_FullMethodName}, func(ctx context.Context, _ any) (any, error) {
+		p, ok := authn.FromContext(ctx)
+		if !ok {
+			t.Fatal("missing principal")
+		}
+		if len(p.Scopes) != 1 || p.Scopes[0] != "vault:read" {
+			t.Fatalf("scopes = %v", p.Scopes)
+		}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -281,7 +305,7 @@ func TestAuthInterceptorCopiesRole(t *testing.T) {
 		if !ok {
 			t.Fatal("missing principal")
 		}
-		if p != (authn.Principal{TenantID: "tenant-role", ActorID: "actor-role", Role: "admin"}) {
+		if p.TenantID != "tenant-role" || p.ActorID != "actor-role" || p.Role != "admin" {
 			t.Fatalf("principal = %+v", p)
 		}
 		return nil, nil
@@ -404,11 +428,12 @@ func TestRecoveryWrapsAuthPanic(t *testing.T) {
 var errRejected = status.Error(codes.PermissionDenied, "rejected")
 
 type fakeValidator struct {
-	mu  sync.Mutex
-	err error
-	n   int
-	jti string
-	raw string
+	mu     sync.Mutex
+	err    error
+	n      int
+	jti    string
+	raw    string
+	scopes []string
 }
 
 func (f *fakeValidator) ValidateByJTI(_ context.Context, jti, raw string) (*auth.TokenEntry, error) {
@@ -420,7 +445,7 @@ func (f *fakeValidator) ValidateByJTI(_ context.Context, jti, raw string) (*auth
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &auth.TokenEntry{JTI: jti}, nil
+	return &auth.TokenEntry{JTI: jti, Scopes: f.scopes}, nil
 }
 
 func (f *fakeValidator) calls() int {
