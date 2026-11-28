@@ -15,6 +15,7 @@ type Principal struct {
 	Role     string // JWT role; empty is not an org admin
 	Kind     string // KindUser when a forwarded proof was accepted
 	JKT      string // thumbprint of the accepted proof key
+	Scopes   []string
 }
 
 type principalContextKey struct{}

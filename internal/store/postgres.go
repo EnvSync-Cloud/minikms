@@ -187,7 +187,8 @@ func (s *PostgresStore) GetToken(ctx context.Context, jti string) (*auth.TokenEn
 	row := s.pool.QueryRow(ctx,
 		`SELECT t.jti, t.subject_hash, t.jwt_hash, t.issued_at, t.expires_at, t.revoked,
 		        COALESCE(t.cert_serial, ''),
-		        COALESCE(c.status, '')
+		        COALESCE(c.status, ''),
+		        COALESCE(t.scopes, '{}')
 		 FROM token_registry t
 		 LEFT JOIN certificates c
 		   ON COALESCE(t.cert_serial, '') <> ''
@@ -195,7 +196,7 @@ func (s *PostgresStore) GetToken(ctx context.Context, jti string) (*auth.TokenEn
 		 WHERE t.jti = $1`, jti)
 
 	var e auth.TokenEntry
-	err := row.Scan(&e.JTI, &e.SubjectHash, &e.JWTHash, &e.IssuedAt, &e.ExpiresAt, &e.Revoked, &e.CertSerial, &e.CertStatus)
+	err := row.Scan(&e.JTI, &e.SubjectHash, &e.JWTHash, &e.IssuedAt, &e.ExpiresAt, &e.Revoked, &e.CertSerial, &e.CertStatus, &e.Scopes)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

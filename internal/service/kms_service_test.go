@@ -17,6 +17,7 @@ func ctxForTenant(tenantID string) context.Context {
 	return authn.WithPrincipal(context.Background(), authn.Principal{
 		TenantID: tenantID,
 		ActorID:  "session-" + tenantID,
+		Scopes:   []string{"vault:read", "vault:write"},
 	})
 }
 
@@ -481,6 +482,46 @@ func TestKMSService_OrgAPrincipalCannotOperateOnOrgB(t *testing.T) {
 	})
 }
 
+func TestFixtureScopeChecks(t *testing.T) {
+	_, _, dekMgr, _, auditLogger, _, err := testutil.SetupTestKMSStack(testutil.TestRootKeyHex)
+	if err != nil {
+		t.Fatalf("SetupTestKMSStack: %v", err)
+	}
+	svc := NewKMSService(dekMgr, auditLogger)
+	reader := authn.WithPrincipal(context.Background(), authn.Principal{
+		TenantID: "org-scope", ActorID: "reader", Scopes: []string{"vault:read"},
+	})
+	writer := authn.WithPrincipal(context.Background(), authn.Principal{
+		TenantID: "org-scope", ActorID: "writer", Scopes: []string{"vault:write"},
+	})
+
+	if _, err := svc.Encrypt(reader, &EncryptRequest{
+		TenantID: "org-scope", ScopeID: "app", Plaintext: []byte("x"), AAD: "aad",
+	}); err == nil {
+		t.Fatal("encrypt without vault:write was accepted")
+	} else {
+		assertErrorKind(t, err, ErrorPermissionDenied)
+	}
+	enc, err := svc.Encrypt(writer, &EncryptRequest{
+		TenantID: "org-scope", ScopeID: "app", Plaintext: []byte("x"), AAD: "aad",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Decrypt(writer, &DecryptRequest{
+		TenantID: "org-scope", ScopeID: "app", Ciphertext: enc.Ciphertext, AAD: "aad", KeyVersionID: enc.KeyVersionID,
+	}); err == nil {
+		t.Fatal("decrypt without vault:read was accepted")
+	} else {
+		assertErrorKind(t, err, ErrorPermissionDenied)
+	}
+	if _, err := svc.Decrypt(reader, &DecryptRequest{
+		TenantID: "org-scope", ScopeID: "app", Ciphertext: enc.Ciphertext, AAD: "aad", KeyVersionID: enc.KeyVersionID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestKMSService_AuditActorEqualsSessionPrincipal(t *testing.T) {
 	_, _, dekMgr, dekStore, auditLogger, auditStore, err := testutil.SetupTestKMSStack(testutil.TestRootKeyHex)
 	if err != nil {
@@ -493,6 +534,7 @@ func TestKMSService_AuditActorEqualsSessionPrincipal(t *testing.T) {
 	ctx := authn.WithPrincipal(context.Background(), authn.Principal{
 		TenantID: "org-a",
 		ActorID:  sessionPrincipal,
+		Scopes:   []string{"vault:read", "vault:write"},
 	})
 
 	enc, err := svc.Encrypt(ctx, &EncryptRequest{

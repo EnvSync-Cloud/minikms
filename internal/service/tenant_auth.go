@@ -19,6 +19,17 @@ func authenticatedTenant(ctx context.Context, requestTenantID string) (authn.Pri
 	return principal, nil
 }
 
+// requireScope rejects a caller whose session was not granted scope.
+// The check does not depend on the proof mode.
+func requireScope(principal authn.Principal, scope string) error {
+	for _, granted := range principal.Scopes {
+		if granted == scope {
+			return nil
+		}
+	}
+	return NewDomainError(ErrorPermissionDenied, scope+" permission required", nil)
+}
+
 // requirePrincipal rejects a missing caller. An empty tenant or actor is not
 // an authenticated principal.
 func requirePrincipal(ctx context.Context) (authn.Principal, error) {

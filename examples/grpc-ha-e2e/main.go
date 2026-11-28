@@ -42,7 +42,7 @@ func verifyKMSAcrossReplicas(ctx context.Context, first, second grpc.ClientConnI
 	writer := pb.NewKMSServiceClient(first)
 	reader := pb.NewKMSServiceClient(second)
 	plaintext := []byte("ha-kms-roundtrip")
-	authorized := memberSession(ctx, first, "org-ha-e2e", "member-ha-kms", "ha-kms@example.com", []string{"vault:read"})
+	authorized := memberSession(ctx, first, "org-ha-e2e", "member-ha-kms", "ha-kms@example.com", []string{"vault:read", "vault:write"})
 
 	encrypted, err := writer.Encrypt(authorized, &pb.EncryptRequest{
 		TenantId: "org-ha-e2e", ScopeId: "app-ha-e2e",
