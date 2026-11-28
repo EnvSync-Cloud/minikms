@@ -97,11 +97,8 @@ func VerifyProof(raw, accessToken string, now time.Time, maxAge time.Duration) (
 	if claims.ID == "" || claims.IssuedAt == nil {
 		return Proof{}, errors.New("proof is missing jti or iat")
 	}
-	age := now.Sub(claims.IssuedAt.Time)
-	if age < 0 {
-		age = -age
-	}
-	if maxAge <= 0 || age > maxAge {
+	issued := claims.IssuedAt.Time
+	if maxAge <= 0 || issued.Before(now.Add(-maxAge)) || issued.After(now.Add(maxAge)) {
 		return Proof{}, errors.New("proof is outside the freshness window")
 	}
 	sum := sha256.Sum256([]byte(accessToken))

@@ -66,6 +66,21 @@ func TestOtherKeyRejected(t *testing.T) {
 	}
 }
 
+func TestFarFutureProofRejected(t *testing.T) {
+	now := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+	dpopKey := mustP256(t)
+	accessKey := mustRSA(t)
+	token := signAccess(t, accessKey, jwkThumb(t, dpopKey), now)
+	proof := signProof(t, dpopKey, token, "GET", "https://api.envsync.cloud/api/secrets", time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC))
+	if _, err := VerifyProof(proof, token, now, time.Minute); err == nil {
+		t.Fatal("far-future iat was accepted")
+	}
+	atBoundary := signProof(t, dpopKey, token, "GET", "https://api.envsync.cloud/api/secrets", now.Add(time.Minute))
+	if _, err := VerifyProof(atBoundary, token, now, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReplayBudget(t *testing.T) {
 	store := NewMemoryReplay()
 	ctx := context.Background()
