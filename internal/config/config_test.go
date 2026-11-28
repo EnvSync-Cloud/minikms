@@ -72,6 +72,18 @@ func TestLoad_Defaults(t *testing.T) {
 	if !cfg.MemberKeyLegacyRead {
 		t.Error("MemberKeyLegacyRead = false, want true")
 	}
+	if cfg.DPoPMode != "off" {
+		t.Errorf("DPoPMode = %q, want off", cfg.DPoPMode)
+	}
+	if cfg.DPoPMaxProofAgeSec != 60 {
+		t.Errorf("DPoPMaxProofAgeSec = %d, want 60", cfg.DPoPMaxProofAgeSec)
+	}
+	if cfg.DPoPMaxCallsPerProof != 16 {
+		t.Errorf("DPoPMaxCallsPerProof = %d, want 16", cfg.DPoPMaxCallsPerProof)
+	}
+	if err := cfg.ValidateDPoP(); err != nil {
+		t.Errorf("ValidateDPoP() = %v", err)
+	}
 }
 
 func TestLoad_CustomValues(t *testing.T) {

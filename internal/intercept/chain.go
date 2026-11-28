@@ -20,6 +20,7 @@ import (
 	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
 	"github.com/envsync-cloud/minikms/internal/auth"
 	"github.com/envsync-cloud/minikms/internal/authn"
+	"github.com/envsync-cloud/minikms/internal/dpop"
 )
 
 // TokenValidator is the session check performed for protected RPCs.
@@ -37,7 +38,16 @@ type Limiter interface {
 // ServerOptions returns server options for the interceptor chain.
 // Unary and stream order is recovery (outer), then auth, then rate limit.
 func ServerOptions(validator TokenValidator, limiter Limiter) []grpc.ServerOption {
-	c := &chain{validator: validator, limiter: limiter}
+	return serverOptions(&chain{validator: validator, limiter: limiter})
+}
+
+// ServerOptionsWithDPoP installs the forwarded-proof check after session auth.
+// A nil checker leaves session auth unchanged.
+func ServerOptionsWithDPoP(validator TokenValidator, limiter Limiter, proofs *dpop.Checker) []grpc.ServerOption {
+	return serverOptions(&chain{validator: validator, limiter: limiter, proofs: proofs})
+}
+
+func serverOptions(c *chain) []grpc.ServerOption {
 	return []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(c.recoverUnary, c.authUnary, c.rateUnary),
 		grpc.ChainStreamInterceptor(c.recoverStream, c.authStream, c.rateStream),
@@ -47,6 +57,7 @@ func ServerOptions(validator TokenValidator, limiter Limiter) []grpc.ServerOptio
 type chain struct {
 	validator TokenValidator
 	limiter   Limiter
+	proofs    *dpop.Checker
 }
 
 // bearerClaims accepts auth.Claims (org_id) and session tokens (org).
@@ -101,7 +112,7 @@ func (c *chain) recoverStream(srv any, ss grpc.ServerStream, info *grpc.StreamSe
 }
 
 func (c *chain) authUnary(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-	ctx, err := c.authenticate(ctx, info.FullMethod)
+	ctx, err := c.authorize(ctx, info.FullMethod)
 	if err != nil {
 		return nil, err
 	}
@@ -109,11 +120,22 @@ func (c *chain) authUnary(ctx context.Context, req any, info *grpc.UnaryServerIn
 }
 
 func (c *chain) authStream(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-	ctx, err := c.authenticate(ss.Context(), info.FullMethod)
+	ctx, err := c.authorize(ss.Context(), info.FullMethod)
 	if err != nil {
 		return err
 	}
 	return handler(srv, &contextStream{ServerStream: ss, ctx: ctx})
+}
+
+func (c *chain) authorize(ctx context.Context, fullMethod string) (context.Context, error) {
+	ctx, err := c.authenticate(ctx, fullMethod)
+	if err != nil {
+		return nil, err
+	}
+	if c.proofs == nil {
+		return ctx, nil
+	}
+	return c.proofs.Apply(ctx, fullMethod)
 }
 
 func (c *chain) rateUnary(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
