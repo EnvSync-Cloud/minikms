@@ -191,6 +191,7 @@ func TestPostgres_TokenRegistry(t *testing.T) {
 		IssuedAt:    time.Now(),
 		ExpiresAt:   time.Now().Add(1 * time.Hour),
 		Revoked:     false,
+		Scopes:      []string{"vault:read", "vault:write"},
 	}
 	err := store.StoreToken(ctx, entry)
 	if err != nil {
@@ -207,6 +208,9 @@ func TestPostgres_TokenRegistry(t *testing.T) {
 	}
 	if got.JTI != jti {
 		t.Errorf("JTI: got %q, want %q", got.JTI, jti)
+	}
+	if len(got.Scopes) != 2 || got.Scopes[0] != "vault:read" || got.Scopes[1] != "vault:write" {
+		t.Errorf("Scopes: got %v", got.Scopes)
 	}
 
 	// Revoke
