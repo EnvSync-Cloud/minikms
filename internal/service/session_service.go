@@ -17,6 +17,7 @@ import (
 
 	"github.com/envsync-cloud/minikms/internal/audit"
 	"github.com/envsync-cloud/minikms/internal/auth"
+	"github.com/envsync-cloud/minikms/internal/authn"
 	"github.com/envsync-cloud/minikms/internal/pki"
 	"github.com/envsync-cloud/minikms/internal/pkistore"
 	"github.com/envsync-cloud/minikms/internal/store"
@@ -102,6 +103,9 @@ type SessionClaims struct {
 	Role       string   `json:"role"`
 	CertSerial string   `json:"cert_serial"`
 	Scopes     []string `json:"scopes"`
+	Kind       string   `json:"kind,omitempty"`
+	AppID      string   `json:"app,omitempty"`
+	EnvID      string   `json:"env,omitempty"`
 }
 
 // CreateSessionByCertRequest represents a BYOK/CLI certificate-based auth request.
@@ -176,7 +180,7 @@ func (s *SessionService) CreateSessionByCert(ctx context.Context, req *CreateSes
 	scopes := s.resolveScopes(req.Scopes, role)
 
 	// Issue session token
-	return s.issueSessionToken(ctx, memberID, orgID, role, certRecord.SerialNumber, scopes)
+	return s.issueSessionToken(ctx, memberID, orgID, role, certRecord.SerialNumber, scopes, "", "", "")
 }
 
 // parseMemberCertProof checks that the caller holds the presented certificate's
@@ -477,7 +481,7 @@ func (s *SessionService) IssueBootstrapSession(ctx context.Context, memberID, or
 	}
 	// Reissue replaces the previous admin session so the per-subject cap is not exhausted.
 	_, _ = s.policyStore.RevokeTokensBySubject(ctx, orgID, auth.HashSubject(memberID))
-	resp, err := s.issueSessionToken(ctx, memberID, orgID, role, certSerial, s.resolveScopes(nil, role))
+	resp, err := s.issueSessionToken(ctx, memberID, orgID, role, certSerial, s.resolveScopes(nil, role), authn.KindService, "", "")
 	if err != nil {
 		return "", err
 	}
@@ -485,7 +489,25 @@ func (s *SessionService) IssueBootstrapSession(ctx context.Context, memberID, or
 }
 
 // issueSessionToken creates and stores a JWT session token.
-func (s *SessionService) issueSessionToken(ctx context.Context, memberID, orgID, role, certSerial string, scopes []string) (*CreateSessionResponse, error) {
+// IssueMachineSession mints a workload session. It cannot carry admin or PKI scopes.
+func (s *SessionService) IssueMachineSession(ctx context.Context, memberID, orgID, certSerial, appID, envID string, scopes []string) (*CreateSessionResponse, error) {
+	if memberID == "" || orgID == "" || certSerial == "" || appID == "" {
+		return nil, invalidArgument("machine session fields are required")
+	}
+	var granted []string
+	for _, scope := range scopes {
+		switch scope {
+		case "vault:read", "vault:write", "vault:delete":
+			granted = append(granted, scope)
+		}
+	}
+	if len(granted) == 0 {
+		granted = []string{"vault:read"}
+	}
+	return s.issueSessionToken(ctx, memberID, orgID, "machine", certSerial, granted, authn.KindMachine, appID, envID)
+}
+
+func (s *SessionService) issueSessionToken(ctx context.Context, memberID, orgID, role, certSerial string, scopes []string, kind, appID, envID string) (*CreateSessionResponse, error) {
 	// Check session count limit
 	policy, err := s.policyStore.GetOrgSecurityPolicy(ctx, orgID)
 	if err != nil {
@@ -530,6 +552,9 @@ func (s *SessionService) issueSessionToken(ctx context.Context, memberID, orgID,
 		Role:       role,
 		CertSerial: certSerial,
 		Scopes:     scopes,
+		Kind:       kind,
+		AppID:      appID,
+		EnvID:      envID,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)

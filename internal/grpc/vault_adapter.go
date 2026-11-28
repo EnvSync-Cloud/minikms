@@ -5,6 +5,7 @@ import (
 	"log"
 
 	pb "github.com/envsync-cloud/minikms/api/proto/minikms/v1"
+	"github.com/envsync-cloud/minikms/internal/authn"
 	"github.com/envsync-cloud/minikms/internal/service"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -21,6 +22,17 @@ type VaultAdapter struct {
 // NewVaultAdapter creates a new VaultAdapter.
 func NewVaultAdapter(vaultSvc *service.VaultService) *VaultAdapter {
 	return &VaultAdapter{vaultSvc: vaultSvc}
+}
+
+func machineBinding(ctx context.Context, scopeID, envID string) error {
+	principal, ok := authn.FromContext(ctx)
+	if !ok || principal.Kind != authn.KindMachine {
+		return nil
+	}
+	if principal.AppID == "" || principal.AppID != scopeID || (principal.EnvID != "" && envID != "" && principal.EnvID != envID) {
+		return status.Error(codes.PermissionDenied, "permission denied")
+	}
+	return nil
 }
 
 // extractSessionToken gets the session token from gRPC metadata.
@@ -49,6 +61,9 @@ func extractSessionToken(ctx context.Context) (string, error) {
 func (a *VaultAdapter) Write(ctx context.Context, req *pb.VaultWriteRequest) (*pb.VaultWriteResponse, error) {
 	token, err := extractSessionToken(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := machineBinding(ctx, req.ScopeId, req.EnvTypeId); err != nil {
 		return nil, err
 	}
 
@@ -82,6 +97,9 @@ func (a *VaultAdapter) Read(ctx context.Context, req *pb.VaultReadRequest) (*pb.
 	if err != nil {
 		return nil, err
 	}
+	if err := machineBinding(ctx, req.ScopeId, req.EnvTypeId); err != nil {
+		return nil, err
+	}
 
 	var envTypeID *string
 	if req.EnvTypeId != "" {
@@ -107,6 +125,9 @@ func (a *VaultAdapter) Read(ctx context.Context, req *pb.VaultReadRequest) (*pb.
 func (a *VaultAdapter) ReadVersion(ctx context.Context, req *pb.VaultReadVersionRequest) (*pb.VaultReadResponse, error) {
 	token, err := extractSessionToken(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := machineBinding(ctx, req.ScopeId, req.EnvTypeId); err != nil {
 		return nil, err
 	}
 
@@ -136,6 +157,9 @@ func (a *VaultAdapter) Delete(ctx context.Context, req *pb.VaultDeleteRequest) (
 	if err != nil {
 		return nil, err
 	}
+	if err := machineBinding(ctx, req.ScopeId, req.EnvTypeId); err != nil {
+		return nil, err
+	}
 
 	var envTypeID *string
 	if req.EnvTypeId != "" {
@@ -159,6 +183,9 @@ func (a *VaultAdapter) Delete(ctx context.Context, req *pb.VaultDeleteRequest) (
 func (a *VaultAdapter) Destroy(ctx context.Context, req *pb.VaultDestroyRequest) (*pb.VaultDestroyResponse, error) {
 	token, err := extractSessionToken(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := machineBinding(ctx, req.ScopeId, req.EnvTypeId); err != nil {
 		return nil, err
 	}
 
@@ -188,6 +215,9 @@ func (a *VaultAdapter) Destroy(ctx context.Context, req *pb.VaultDestroyRequest)
 func (a *VaultAdapter) List(ctx context.Context, req *pb.VaultListRequest) (*pb.VaultListResponse, error) {
 	token, err := extractSessionToken(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := machineBinding(ctx, req.ScopeId, req.EnvTypeId); err != nil {
 		return nil, err
 	}
 
@@ -222,6 +252,9 @@ func (a *VaultAdapter) List(ctx context.Context, req *pb.VaultListRequest) (*pb.
 func (a *VaultAdapter) History(ctx context.Context, req *pb.VaultHistoryRequest) (*pb.VaultHistoryResponse, error) {
 	token, err := extractSessionToken(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := machineBinding(ctx, req.ScopeId, req.EnvTypeId); err != nil {
 		return nil, err
 	}
 

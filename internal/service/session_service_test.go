@@ -9,9 +9,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -266,6 +268,13 @@ func TestIssueBootstrapSession_AdminRole(t *testing.T) {
 	}
 	if !resp.Valid || resp.Role != "admin" || resp.OrgID != "org-1" || resp.MemberID != "member-1" || resp.CertSerial != "abc123" {
 		t.Fatalf("session = %+v", resp)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.Split(token, ".")[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(payload), `"kind":"service"`) {
+		t.Fatalf("bootstrap session is not a service principal: %s", payload)
 	}
 	for _, scope := range []string{"vault:read", "vault:write", "pki:issue"} {
 		if !HasScope(resp, scope) {
