@@ -4,8 +4,12 @@ package authn
 import "context"
 
 const (
-	// KindUser is a caller bound from a forwarded proof. An empty Kind is the session principal.
+	// KindUser is a caller bound from a forwarded proof. An empty Kind is a member session.
 	KindUser = "user"
+	// KindMachine is a workload token. It is weaker than a user proof: no admin or PKI calls.
+	KindMachine = "machine"
+	// KindService is the org bootstrap credential or a background job.
+	KindService = "service"
 )
 
 // Principal is the caller established by a validated session token.
@@ -16,6 +20,8 @@ type Principal struct {
 	Kind     string // KindUser when a forwarded proof was accepted
 	JKT      string // thumbprint of the accepted proof key
 	Scopes   []string
+	AppID    string // machine tokens are limited to this app
+	EnvID    string // machine tokens are limited to this environment when set
 }
 
 type principalContextKey struct{}

@@ -482,6 +482,34 @@ func TestKMSService_OrgAPrincipalCannotOperateOnOrgB(t *testing.T) {
 	})
 }
 
+func TestFixtureMachineAppBinding(t *testing.T) {
+	_, _, dekMgr, _, auditLogger, _, err := testutil.SetupTestKMSStack(testutil.TestRootKeyHex)
+	if err != nil {
+		t.Fatalf("SetupTestKMSStack: %v", err)
+	}
+	svc := NewKMSService(dekMgr, auditLogger)
+	ctx := authn.WithPrincipal(context.Background(), authn.Principal{
+		TenantID: "org-machine",
+		ActorID:  "workload",
+		Kind:     authn.KindMachine,
+		AppID:    "app-allowed",
+		Scopes:   []string{"vault:read", "vault:write"},
+	})
+	enc, err := svc.Encrypt(ctx, &EncryptRequest{
+		TenantID: "org-machine", ScopeID: "app-allowed", Plaintext: []byte("x"), AAD: "aad",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Decrypt(ctx, &DecryptRequest{
+		TenantID: "org-machine", ScopeID: "app-other", Ciphertext: enc.Ciphertext, AAD: "aad", KeyVersionID: enc.KeyVersionID,
+	}); err == nil {
+		t.Fatal("machine token decrypted another app")
+	} else {
+		assertErrorKind(t, err, ErrorPermissionDenied)
+	}
+}
+
 func TestFixtureScopeChecks(t *testing.T) {
 	_, _, dekMgr, _, auditLogger, _, err := testutil.SetupTestKMSStack(testutil.TestRootKeyHex)
 	if err != nil {

@@ -66,6 +66,9 @@ type bearerClaims struct {
 	OrgID string `json:"org_id,omitempty"`
 	Org   string `json:"org,omitempty"`
 	Role  string `json:"role,omitempty"`
+	Kind  string `json:"kind,omitempty"`
+	App   string `json:"app,omitempty"`
+	Env   string `json:"env,omitempty"`
 }
 
 func (c bearerClaims) tenantID() string {
@@ -182,6 +185,9 @@ func (c *chain) authenticate(ctx context.Context, fullMethod string) (context.Co
 		ActorID:  actorID,
 		Role:     claims.Role,
 		Scopes:   entry.Scopes,
+		Kind:     claims.Kind,
+		AppID:    claims.App,
+		EnvID:    claims.Env,
 	}), nil
 }
 

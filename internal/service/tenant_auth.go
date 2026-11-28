@@ -21,6 +21,17 @@ func authenticatedTenant(ctx context.Context, requestTenantID string) (authn.Pri
 
 // requireScope rejects a caller whose session was not granted scope.
 // The check does not depend on the proof mode.
+// requireMachineBinding limits a machine token to its app.
+func requireMachineBinding(principal authn.Principal, scopeID string) error {
+	if principal.Kind != authn.KindMachine {
+		return nil
+	}
+	if principal.AppID == "" || principal.AppID != scopeID {
+		return NewDomainError(ErrorPermissionDenied, "app access denied", nil)
+	}
+	return nil
+}
+
 func requireScope(principal authn.Principal, scope string) error {
 	for _, granted := range principal.Scopes {
 		if granted == scope {

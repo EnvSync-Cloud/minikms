@@ -61,7 +61,25 @@ type Checker struct {
 // Apply checks user-data calls. Other methods keep the session principal.
 // monitor records a failure and still calls the handler. enforce rejects it.
 func (c *Checker) Apply(ctx context.Context, fullMethod string) (context.Context, error) {
-	if c == nil || c.Mode == ModeOff || !userDataMethod(fullMethod) {
+	if c == nil {
+		return ctx, nil
+	}
+	if principal, ok := authn.FromContext(ctx); ok {
+		switch principal.Kind {
+		case authn.KindMachine:
+			if privilegedMethod(fullMethod) {
+				return nil, status.Error(codes.PermissionDenied, "permission denied")
+			}
+			return ctx, nil
+		case authn.KindService:
+			if c.Mode == ModeEnforce && userDataRead(fullMethod) {
+				log.Printf("dpop service read denied method=%s", fullMethod)
+				return nil, status.Error(codes.PermissionDenied, "permission denied")
+			}
+			return ctx, nil
+		}
+	}
+	if c.Mode == ModeOff || !userDataMethod(fullMethod) {
 		return ctx, nil
 	}
 	next, reason, err := c.evaluate(ctx, fullMethod)
@@ -128,6 +146,24 @@ func (c *Checker) evaluate(ctx context.Context, fullMethod string) (context.Cont
 	principal.Kind = authn.KindUser
 	principal.JKT = proof.JKT
 	return authn.WithPrincipal(ctx, principal), "", nil
+}
+
+func privilegedMethod(fullMethod string) bool {
+	return strings.Contains(fullMethod, "PKIService/") || strings.Contains(fullMethod, "SessionService/")
+}
+
+func userDataRead(fullMethod string) bool {
+	switch fullMethod {
+	case pb.KMSService_Decrypt_FullMethodName,
+		pb.KMSService_BatchDecrypt_FullMethodName,
+		pb.VaultService_Read_FullMethodName,
+		pb.VaultService_ReadVersion_FullMethodName,
+		pb.VaultService_List_FullMethodName,
+		pb.VaultService_History_FullMethodName:
+		return true
+	default:
+		return false
+	}
 }
 
 func userDataMethod(fullMethod string) bool {
